@@ -26,31 +26,27 @@ The Payment SAGA Platform requires scaling from ~80 TPS (current) to 500+ TPS to
 
 Implement **Customer-Hash Sharding** combined with **Priority-Based Routing** to distribute workflows across multiple task queues, enabling true horizontal scaling.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Payment Request                              │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    PaymentRouter                                 │
-│  1. Calculate Priority (CRITICAL/HIGH/NORMAL/LOW)               │
-│  2. Calculate Shard ID = hash(customerId) % shardCount          │
-│  3. Route to: payment-saga-queue-{priority}-shard-{id}          │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-           ┌──────────────────┼──────────────────┐
-           ▼                  ▼                  ▼
-    ┌────────────┐     ┌────────────┐     ┌────────────┐
-    │ Critical   │     │   High     │     │  Normal    │
-    │ Shards 0-3 │     │ Shards 0-7 │     │ Shards 0-15│
-    └────────────┘     └────────────┘     └────────────┘
-           │                  │                  │
-           ▼                  ▼                  ▼
-    ┌────────────┐     ┌────────────┐     ┌────────────┐
-    │  Workers   │     │  Workers   │     │  Workers   │
-    │  (8 pods)  │     │  (8 pods)  │     │ (16 pods)  │
-    └────────────┘     └────────────┘     └────────────┘
+```mermaid
+flowchart TB
+    A[Payment Request]
+
+    subgraph Router["PaymentRouter"]
+        R1["1. Calculate Priority (CRITICAL/HIGH/NORMAL/LOW)"]
+        R2["2. Calculate Shard ID = hash(customerId) % shardCount"]
+        R3["3. Route to: payment-saga-queue-{priority}-shard-{id}"]
+    end
+
+    A --> Router
+
+    Router --> C["Critical<br/>Shards 0-3"]
+    Router --> H["High<br/>Shards 0-7"]
+    Router --> N["Normal<br/>Shards 0-15"]
+    Router --> L["Low<br/>Shards 0-7"]
+
+    C --> CW["Workers<br/>(8 pods)"]
+    H --> HW["Workers<br/>(8 pods)"]
+    N --> NW["Workers<br/>(16 pods)"]
+    L --> LW["Workers<br/>(8 pods)"]
 ```
 
 ### Key Benefits
@@ -121,31 +117,42 @@ if (isVipCustomer(customerId)) {
 
 ### Queue Layout
 
-```
-Payment SAGA Task Queues (36 total)
-├── CRITICAL Priority (4 shards)
-│   ├── payment-saga-queue-critical-shard-0
-│   ├── payment-saga-queue-critical-shard-1
-│   ├── payment-saga-queue-critical-shard-2
-│   └── payment-saga-queue-critical-shard-3
-│
-├── HIGH Priority (8 shards)
-│   ├── payment-saga-queue-high-shard-0
-│   ├── payment-saga-queue-high-shard-1
-│   ├── ... (shards 2-6)
-│   └── payment-saga-queue-high-shard-7
-│
-├── NORMAL Priority (16 shards)
-│   ├── payment-saga-queue-normal-shard-0
-│   ├── payment-saga-queue-normal-shard-1
-│   ├── ... (shards 2-14)
-│   └── payment-saga-queue-normal-shard-15
-│
-└── LOW Priority (8 shards)
-    ├── payment-saga-queue-low-shard-0
-    ├── payment-saga-queue-low-shard-1
-    ├── ... (shards 2-6)
-    └── payment-saga-queue-low-shard-7
+```mermaid
+flowchart TB
+    Root["Payment SAGA Task Queues<br/>(36 total)"]
+
+    subgraph Critical["CRITICAL Priority (4 shards)"]
+        C0["payment-saga-queue-critical-shard-0"]
+        C1["payment-saga-queue-critical-shard-1"]
+        C2["payment-saga-queue-critical-shard-2"]
+        C3["payment-saga-queue-critical-shard-3"]
+    end
+
+    subgraph High["HIGH Priority (8 shards)"]
+        H0["payment-saga-queue-high-shard-0"]
+        H1["payment-saga-queue-high-shard-1"]
+        H2["... (shards 2-6)"]
+        H7["payment-saga-queue-high-shard-7"]
+    end
+
+    subgraph Normal["NORMAL Priority (16 shards)"]
+        N0["payment-saga-queue-normal-shard-0"]
+        N1["payment-saga-queue-normal-shard-1"]
+        N2["... (shards 2-14)"]
+        N15["payment-saga-queue-normal-shard-15"]
+    end
+
+    subgraph Low["LOW Priority (8 shards)"]
+        L0["payment-saga-queue-low-shard-0"]
+        L1["payment-saga-queue-low-shard-1"]
+        L2["... (shards 2-6)"]
+        L7["payment-saga-queue-low-shard-7"]
+    end
+
+    Root --> Critical
+    Root --> High
+    Root --> Normal
+    Root --> Low
 ```
 
 ### Priority Configuration
@@ -315,39 +322,44 @@ resources:
 
 ### Production Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Load Balancer (ALB/NLB)                      │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-              ┌───────────────┼───────────────┐
-              ▼               ▼               ▼
-      ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-      │   Frontend   │ │   Frontend   │ │   Frontend   │
-      │   Service    │ │   Service    │ │   Service    │
-      │  (3 replicas)│ │              │ │              │
-      └──────────────┘ └──────────────┘ └──────────────┘
-              │               │               │
-              └───────────────┼───────────────┘
-                              │
-      ┌───────────────────────┼───────────────────────┐
-      │                       │                       │
-      ▼                       ▼                       ▼
-┌──────────────┐       ┌──────────────┐       ┌──────────────┐
-│   Matching   │       │   History    │       │   Worker     │
-│   Service    │       │   Service    │       │   Service    │
-│ (3 replicas) │       │ (4 replicas) │       │ (2 replicas) │
-└──────────────┘       └──────────────┘       └──────────────┘
-      │                       │                       │
-      └───────────────────────┼───────────────────────┘
-                              │
-              ┌───────────────┼───────────────┐
-              ▼               ▼               ▼
-      ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-      │  PostgreSQL  │ │ Elasticsearch│ │    Redis     │
-      │  (Primary +  │ │  (Visibility │ │   (Cache)    │
-      │   Replica)   │ │    Store)    │ │              │
-      └──────────────┘ └──────────────┘ └──────────────┘
+```mermaid
+flowchart TB
+    LB["Load Balancer (ALB/NLB)"]
+
+    subgraph Frontend["Frontend Service (3 replicas)"]
+        F1["Frontend 1"]
+        F2["Frontend 2"]
+        F3["Frontend 3"]
+    end
+
+    LB --> F1
+    LB --> F2
+    LB --> F3
+
+    subgraph Services["Temporal Services"]
+        M["Matching Service<br/>(3 replicas)"]
+        H["History Service<br/>(4 replicas)"]
+        W["Worker Service<br/>(2 replicas)"]
+    end
+
+    F1 --> M
+    F2 --> H
+    F3 --> W
+    F1 --> H
+    F2 --> M
+
+    subgraph Storage["Persistence Layer"]
+        PG[(PostgreSQL<br/>Primary + Replica)]
+        ES[(Elasticsearch<br/>Visibility Store)]
+        RD[(Redis<br/>Cache)]
+    end
+
+    M --> PG
+    H --> PG
+    M --> ES
+    H --> ES
+    M --> RD
+    H --> RD
 ```
 
 ### History Shards Configuration
@@ -545,23 +557,31 @@ For bank-wide payment processing requiring 10,000+ TPS, Cassandra provides signi
 
 ### Cassandra Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    TEMPORAL SERVER CLUSTER                       │
-├─────────────────────────────────────────────────────────────────┤
-│  Frontend (3)  │  Matching (3)  │  History (5)  │  Worker (2)   │
-└────────┬───────┴────────────────┴───────┬───────┴───────────────┘
-         │                                │
-         │  Execution/History Store       │  Visibility Store
-         ▼                                ▼
-┌─────────────────────────┐     ┌─────────────────────────┐
-│   CASSANDRA CLUSTER     │     │   POSTGRESQL            │
-├─────────────────────────┤     ├─────────────────────────┤
-│ • 5 nodes (minimum)     │     │ • Primary + Replica     │
-│ • RF=3, LOCAL_QUORUM    │     │ • Advanced Visibility   │
-│ • 4000+ history shards  │     │ • Workflow search/list  │
-│ • NVMe SSD storage      │     │                         │
-└─────────────────────────┘     └─────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Temporal["TEMPORAL SERVER CLUSTER"]
+        direction LR
+        F["Frontend (3)"]
+        M["Matching (3)"]
+        H["History (5)"]
+        W["Worker (2)"]
+    end
+
+    subgraph Cassandra["CASSANDRA CLUSTER<br/>(Execution/History Store)"]
+        C1["• 5 nodes (minimum)"]
+        C2["• RF=3, LOCAL_QUORUM"]
+        C3["• 4000+ history shards"]
+        C4["• NVMe SSD storage"]
+    end
+
+    subgraph PostgreSQL["POSTGRESQL<br/>(Visibility Store)"]
+        P1["• Primary + Replica"]
+        P2["• Advanced Visibility"]
+        P3["• Workflow search/list"]
+    end
+
+    Temporal -->|"Execution/History Store"| Cassandra
+    Temporal -->|"Visibility Store"| PostgreSQL
 ```
 
 **Critical Constraint:** Cassandra CANNOT be used for Visibility store (deprecated in Temporal v1.21+). You must use PostgreSQL or Elasticsearch for Visibility.
@@ -614,10 +634,13 @@ WITH replication = {
 | PostgreSQL | 512 | ~10-50 |
 | Cassandra | 4,000-16,000 | ~100-200 |
 
-```
-Throughput Calculation:
-  PostgreSQL: 512 shards × 50 TPS/shard = 25,600 TPS max
-  Cassandra:  4000 shards × 150 TPS/shard = 600,000 TPS max
+```mermaid
+flowchart LR
+    subgraph Throughput["THROUGHPUT CALCULATION"]
+        direction TB
+        PG["PostgreSQL:<br/>512 shards × 50 TPS/shard = 25,600 TPS max"]
+        CS["Cassandra:<br/>4000 shards × 150 TPS/shard = 600,000 TPS max"]
+    end
 ```
 
 ### Kubernetes Deployment with K8ssandra
@@ -705,21 +728,35 @@ persistence:
 
 Since Cassandra uses different schema and cannot migrate existing data:
 
-```
-1. Deploy Cassandra cluster alongside existing PostgreSQL
-   └── New cluster, no data migration
+```mermaid
+flowchart TB
+    subgraph Migration["MIGRATION STEPS"]
+        direction TB
 
-2. Deploy NEW Temporal cluster with Cassandra backend
-   └── Separate from existing Temporal cluster
+        S1["1. Deploy Cassandra cluster alongside existing PostgreSQL"]
+        S1N["New cluster, no data migration"]
+        S1 --> S1N
 
-3. Route NEW workflows to Cassandra-backed Temporal
-   └── Update application configuration
+        S2["2. Deploy NEW Temporal cluster with Cassandra backend"]
+        S2N["Separate from existing Temporal cluster"]
+        S1N --> S2
+        S2 --> S2N
 
-4. Let existing workflows complete on PostgreSQL-backed Temporal
-   └── Monitor until drained (hours to days)
+        S3["3. Route NEW workflows to Cassandra-backed Temporal"]
+        S3N["Update application configuration"]
+        S2N --> S3
+        S3 --> S3N
 
-5. Decommission old Temporal cluster
-   └── Remove PostgreSQL execution store
+        S4["4. Let existing workflows complete on PostgreSQL-backed Temporal"]
+        S4N["Monitor until drained (hours to days)"]
+        S3N --> S4
+        S4 --> S4N
+
+        S5["5. Decommission old Temporal cluster"]
+        S5N["Remove PostgreSQL execution store"]
+        S4N --> S5
+        S5 --> S5N
+    end
 ```
 
 ### Cassandra Operational Considerations
