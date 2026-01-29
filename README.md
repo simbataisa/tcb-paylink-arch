@@ -2003,6 +2003,3 @@ kubectl logs -l app=kong -n kong
 ### Planning & Migration
 - [Enhancement Plan](docs/ENHANCEMENT_PLAN.md) - Planned improvements
 - [Kong Migration Plan](docs/KONG_MIGRATION_PLAN.md) - Migration from Eureka to Kong Gateway
-
-### Development
-- [CLAUDE.md](CLAUDE.md) - Development guide for Claude Code

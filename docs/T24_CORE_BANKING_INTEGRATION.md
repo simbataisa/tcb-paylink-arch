@@ -6,6 +6,9 @@ This document describes the architecture design and principles for integrating t
 
 - [Executive Summary](#executive-summary)
 - [Why SAGA Pattern for Core Banking](#why-saga-pattern-for-core-banking)
+  - [Why NOT Traditional 2PC](#why-not-traditional-2pc-two-phase-commit)
+  - [Why NOT TCC Pattern](#why-not-tcc-try-confirm-cancel-pattern)
+  - [SAGA Pattern Advantages](#saga-pattern-advantages-for-t24-integration)
 - [T24 Integration Challenges](#t24-integration-challenges)
 - [Architecture Design](#architecture-design)
 - [Integration Principles](#integration-principles)
@@ -13,6 +16,7 @@ This document describes the architecture design and principles for integrating t
 - [Compensation Strategies](#compensation-strategies)
 - [Implementation Patterns](#implementation-patterns)
 - [Monitoring and Reconciliation](#monitoring-and-reconciliation)
+- [Summary](#summary)
 
 ---
 
@@ -22,52 +26,44 @@ This document describes the architecture design and principles for integrating t
 
 Temenos T24 core banking systems present unique integration challenges:
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    TRADITIONAL APPROACH                          │
-│                                                                  │
-│   Payment Request → T24 (blocking) → Response                   │
-│                          │                                       │
-│                          ▼                                       │
-│                    ┌──────────┐                                  │
-│                    │ PROBLEMS │                                  │
-│                    ├──────────┤                                  │
-│                    │ • 30-60s response times                     │
-│                    │ • Batch processing windows                  │
-│                    │ • Limited concurrent connections            │
-│                    │ • No distributed transaction support        │
-│                    │ • Account locks during processing           │
-│                    │ • EOD/SOD processing blackouts              │
-│                    └──────────┘                                  │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph Traditional["TRADITIONAL APPROACH"]
+        A[Payment Request] --> B[T24 - blocking]
+        B --> C[Response]
+        B --> D[PROBLEMS]
+    end
+
+    subgraph Problems[" "]
+        D --> P1["30-60s response times"]
+        D --> P2["Batch processing windows"]
+        D --> P3["Limited concurrent connections"]
+        D --> P4["No distributed transaction support"]
+        D --> P5["Account locks during processing"]
+        D --> P6["EOD/SOD processing blackouts"]
+    end
 ```
 
 ### The Solution
 
 Apply SAGA pattern with asynchronous T24 integration:
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    SAGA-BASED APPROACH                           │
-│                                                                  │
-│   Payment Request                                                │
-│        │                                                         │
-│        ▼                                                         │
-│   ┌──────────────────┐     ┌──────────────────┐                 │
-│   │ Payment SAGA     │────▶│ T24 Adapter      │                 │
-│   │ (Temporal)       │     │ (Async/Queue)    │                 │
-│   │                  │◀────│                  │                 │
-│   │ • Non-blocking   │     │ • Request Queue  │                 │
-│   │ • Compensation   │     │ • Response Queue │                 │
-│   │ • State Tracking │     │ • Idempotent     │                 │
-│   └──────────────────┘     └──────────────────┘                 │
-│                                   │                              │
-│                                   ▼                              │
-│                            ┌──────────────┐                     │
-│                            │     T24      │                     │
-│                            │ Core Banking │                     │
-│                            └──────────────┘                     │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph SAGA["SAGA-BASED APPROACH"]
+        A[Payment Request] --> B
+
+        subgraph Temporal["Payment SAGA (Temporal)"]
+            B["• Non-blocking<br/>• Compensation<br/>• State Tracking"]
+        end
+
+        subgraph Adapter["T24 Adapter (Async/Queue)"]
+            C["• Request Queue<br/>• Response Queue<br/>• Idempotent"]
+        end
+
+        B <--> C
+        C --> D[(T24<br/>Core Banking)]
+    end
 ```
 
 ---
@@ -87,38 +83,243 @@ Apply SAGA pattern with asynchronous T24 integration:
 
 ### Why NOT Traditional 2PC (Two-Phase Commit)
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                TWO-PHASE COMMIT (2PC)                           │
-│                                                                  │
-│   Coordinator                                                    │
-│       │                                                          │
-│       ├──── PREPARE ────▶ Payment Service ✓                     │
-│       ├──── PREPARE ────▶ T24 Core Banking ✗ (No 2PC support)   │
-│       │                                                          │
-│   ❌ FAILURE: T24 doesn't support distributed transactions      │
-│   ❌ PROBLEM: Locks held across network boundaries              │
-│   ❌ PROBLEM: Single coordinator = single point of failure      │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph TwoPC["TWO-PHASE COMMIT (2PC)"]
+        direction TB
+        C1[Coordinator]
+        C1 -->|PREPARE| PS1[Payment Service ✓]
+        C1 -->|PREPARE| T24_1["T24 Core Banking ✗<br/>(No 2PC support)"]
 
-┌─────────────────────────────────────────────────────────────────┐
-│                    SAGA PATTERN                                  │
-│                                                                  │
-│   Orchestrator (Temporal)                                        │
-│       │                                                          │
-│       ├──── Step 1 ────▶ Validate Account ✓                     │
-│       ├──── Step 2 ────▶ Reserve Amount ✓                       │
-│       ├──── Step 3 ────▶ Debit T24 Account ✗ (Failed)           │
-│       │                                                          │
-│       ├──── Compensate ─▶ Release Reserve ✓                     │
-│       └──── Compensate ─▶ Cancel Validation ✓                   │
-│                                                                  │
-│   ✓ Each step is independent transaction                        │
-│   ✓ Compensation reverses completed steps                        │
-│   ✓ State persisted, survives failures                          │
-│   ✓ Works with T24's existing transaction model                 │
-└─────────────────────────────────────────────────────────────────┘
+        F1["❌ FAILURE: T24 doesn't support distributed transactions"]
+        F2["❌ PROBLEM: Locks held across network boundaries"]
+        F3["❌ PROBLEM: Single coordinator = single point of failure"]
+    end
 ```
+
+```mermaid
+flowchart TB
+    subgraph SAGA["SAGA PATTERN"]
+        direction TB
+        O[Orchestrator - Temporal]
+
+        O -->|Step 1| S1[Validate Account ✓]
+        O -->|Step 2| S2[Reserve Amount ✓]
+        O -->|Step 3| S3["Debit T24 Account ✗<br/>(Failed)"]
+
+        O -.->|Compensate| C1[Release Reserve ✓]
+        O -.->|Compensate| C2[Cancel Validation ✓]
+
+        B1["✓ Each step is independent transaction"]
+        B2["✓ Compensation reverses completed steps"]
+        B3["✓ State persisted, survives failures"]
+        B4["✓ Works with T24's existing transaction model"]
+    end
+```
+
+### Why NOT TCC (Try-Confirm-Cancel) Pattern
+
+TCC is another distributed transaction pattern that appears suitable at first glance but presents fundamental incompatibilities with T24's operational model.
+
+#### How TCC Works
+
+```mermaid
+flowchart TB
+    subgraph TCC["TRY-CONFIRM-CANCEL (TCC) PATTERN"]
+        direction TB
+
+        subgraph Try["Phase 1: TRY (Reserve)"]
+            T1["Reserve resources"]
+            T2["Create tentative state"]
+            T3["Lock resources for timeout period"]
+        end
+
+        subgraph Confirm["Phase 2: CONFIRM (Commit)"]
+            C1["Make reservation permanent"]
+            C2["Release locks"]
+            C3["Must be idempotent"]
+        end
+
+        subgraph Cancel["Phase 2: CANCEL (Rollback)"]
+            X1["Release reservations"]
+            X2["Restore original state"]
+            X3["Must be idempotent"]
+        end
+
+        Try -->|All Try succeed| Confirm
+        Try -->|Any Try fails| Cancel
+    end
+```
+
+#### TCC vs T24: Fundamental Incompatibilities
+
+```mermaid
+flowchart LR
+    subgraph TCC_Req["TCC REQUIREMENTS"]
+        R1["Tentative reservations<br/>(soft locks)"]
+        R2["Quick confirmation<br/>(< 5 seconds)"]
+        R3["Native Cancel support<br/>(undo tentative)"]
+        R4["Timeout-based<br/>auto-cancellation"]
+        R5["All participants must<br/>implement TCC protocol"]
+    end
+
+    subgraph T24_Reality["T24 REALITY"]
+        T1["Postings are final<br/>(no tentative state)"]
+        T2["30-60s response times<br/>(exceeds TCC timeout)"]
+        T3["Reversal = new posting<br/>(not cancel)"]
+        T4["No auto-cancel<br/>(requires explicit reversal)"]
+        T5["OFS protocol only<br/>(no TCC support)"]
+    end
+
+    R1 -.->|"❌ Incompatible"| T1
+    R2 -.->|"❌ Incompatible"| T2
+    R3 -.->|"❌ Incompatible"| T3
+    R4 -.->|"❌ Incompatible"| T4
+    R5 -.->|"❌ Incompatible"| T5
+```
+
+#### Detailed Analysis: Why TCC Fails with T24
+
+| TCC Requirement | T24 Behavior | Problem |
+|-----------------|--------------|---------|
+| **Tentative Reservations** | T24 postings are immediately final. There is no "tentative" state - once a debit posts, funds are moved. | Cannot implement true TRY phase without custom T24 modifications |
+| **Quick Confirmation** | T24 operations take 30-60 seconds. TCC assumes sub-second TRY phase with quick CONFIRM. | TCC timeout would expire before T24 responds |
+| **Native Cancel** | T24 has no "cancel" - only reversal postings. A cancel in T24 creates a new offsetting transaction. | "Cancel" leaves audit trail, doesn't truly undo |
+| **Resource Locking** | T24 locks accounts during posting, but releases immediately after. TCC requires holding locks until CONFIRM/CANCEL. | Cannot extend T24's lock duration |
+| **Coordinator Timeout** | TCC coordinators auto-cancel after timeout. T24 during EOD may not respond for hours. | Mass cancellations during batch windows |
+| **Protocol Support** | TCC requires all participants to implement Try/Confirm/Cancel interfaces. T24 uses OFS messaging. | Would require building TCC facade over OFS |
+
+#### TCC Implementation Attempt with T24
+
+```mermaid
+sequenceDiagram
+    participant Coord as TCC Coordinator
+    participant PS as Payment Service
+    participant T24
+
+    Note over Coord: TCC Timeout: 30 seconds
+
+    Coord->>PS: TRY: Reserve $100
+    PS-->>Coord: Reserved ✓
+
+    Coord->>T24: TRY: Reserve $100 from Account
+    Note over T24: Processing...<br/>30-60 seconds
+
+    Note over Coord: ⏰ TIMEOUT (30s)!<br/>Must CANCEL all
+
+    Coord->>PS: CANCEL: Release $100
+    PS-->>Coord: Released ✓
+
+    Note over T24: Still processing...
+
+    T24-->>Coord: Reserved ✓ (too late!)
+
+    Note over Coord,T24: ❌ INCONSISTENT STATE<br/>T24 has reservation<br/>Payment Service cancelled
+```
+
+#### The "Pseudo-TCC" Anti-Pattern
+
+Some teams attempt to build TCC over T24 using this approach:
+
+```mermaid
+flowchart TB
+    subgraph Pseudo["PSEUDO-TCC ANTI-PATTERN"]
+        direction TB
+
+        subgraph PseudoTry["Pseudo-TRY"]
+            PT1["Create HOLD transaction in T24"]
+            PT2["Block funds without posting"]
+        end
+
+        subgraph PseudoConfirm["Pseudo-CONFIRM"]
+            PC1["Convert HOLD to actual debit"]
+            PC2["Two T24 operations required"]
+        end
+
+        subgraph PseudoCancel["Pseudo-CANCEL"]
+            PX1["Release HOLD"]
+            PX2["Another T24 operation"]
+        end
+
+        PseudoTry --> PseudoConfirm
+        PseudoTry --> PseudoCancel
+    end
+
+    subgraph Problems["WHY THIS FAILS"]
+        P1["❌ HOLD + CONFIRM = 2x latency (60-120s)"]
+        P2["❌ HOLD may fail during EOD"]
+        P3["❌ CONFIRM may fail after HOLD succeeds"]
+        P4["❌ Orphaned HOLDs if coordinator crashes"]
+        P5["❌ T24 HOLD limits per account"]
+    end
+
+    Pseudo --> Problems
+```
+
+**Problems with Pseudo-TCC:**
+1. **Double Latency**: TRY (hold) + CONFIRM (post) = 60-120 seconds total
+2. **Partial Failures**: HOLD succeeds but CONFIRM fails during EOD
+3. **Orphaned Holds**: Coordinator crash leaves funds locked
+4. **Hold Limits**: T24 has limits on concurrent holds per account
+5. **Complexity**: More failure modes than direct posting
+
+#### Why SAGA is Superior to TCC for T24
+
+```mermaid
+flowchart TB
+    subgraph Comparison["SAGA vs TCC for T24"]
+        direction LR
+
+        subgraph SAGA_Adv["SAGA ADVANTAGES"]
+            S1["✓ Works with T24's posting model"]
+            S2["✓ No timeout constraints"]
+            S3["✓ Handles 30-60s latency"]
+            S4["✓ Survives EOD windows"]
+            S5["✓ Compensation = reversal posting"]
+            S6["✓ Durable state in Temporal"]
+        end
+
+        subgraph TCC_Dis["TCC DISADVANTAGES"]
+            T1["❌ Requires tentative state"]
+            T2["❌ Timeout-based coordination"]
+            T3["❌ Cannot handle slow responses"]
+            T4["❌ Fails during batch windows"]
+            T5["❌ Cancel ≠ T24 reversal"]
+            T6["❌ Coordinator is SPOF"]
+        end
+    end
+```
+
+| Aspect | TCC | SAGA | Winner for T24 |
+|--------|-----|------|----------------|
+| **Latency Tolerance** | Low (seconds) | High (hours/days) | SAGA |
+| **T24 Protocol** | Requires custom facade | Works with OFS directly | SAGA |
+| **EOD/SOD Handling** | Times out, mass cancels | Queues, retries automatically | SAGA |
+| **Failure Recovery** | Coordinator must be available | Temporal persists state | SAGA |
+| **Audit Trail** | TRY + CONFIRM/CANCEL | Single posting + reversal if needed | SAGA |
+| **Implementation Effort** | High (build TCC over T24) | Low (use T24 as-is) | SAGA |
+| **Operational Complexity** | High (orphaned reservations) | Low (compensation is explicit) | SAGA |
+
+#### Summary: TCC is Not Suitable for T24
+
+```mermaid
+flowchart TB
+    subgraph Decision["PATTERN SELECTION FOR T24"]
+        Q1{{"Does T24 support<br/>tentative reservations?"}}
+        Q2{{"Can T24 respond<br/>within TCC timeout?"}}
+        Q3{{"Does T24 have native<br/>Cancel operation?"}}
+
+        Q1 -->|"No"| TCC_Out["❌ TCC Not Viable"]
+        Q2 -->|"No (30-60s)"| TCC_Out
+        Q3 -->|"No (reversal only)"| TCC_Out
+
+        TCC_Out --> SAGA_Win["✓ Use SAGA Pattern"]
+
+        SAGA_Win --> Benefits["Benefits:<br/>• Works with T24's posting model<br/>• Handles long latencies<br/>• Survives batch windows<br/>• Clear compensation via reversal"]
+    end
+```
+
+**Key Takeaway**: TCC assumes a world of fast, tentative operations with native cancel support. T24 operates in a world of slow, final postings with reversal-based compensation. SAGA's "execute and compensate" model aligns perfectly with T24's "post and reverse" model.
 
 ### SAGA Pattern Advantages for T24 Integration
 
@@ -180,37 +381,18 @@ public T24Response debitAccount(T24DebitRequest request) {
 
 **Solution:** Backpressure Queue with Scheduled Retry
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                  T24 AVAILABILITY HANDLING                       │
-│                                                                  │
-│   Payment Request                                                │
-│        │                                                         │
-│        ▼                                                         │
-│   ┌──────────────────┐                                          │
-│   │ T24 Availability │                                          │
-│   │     Check        │                                          │
-│   └────────┬─────────┘                                          │
-│            │                                                     │
-│     ┌──────┴──────┐                                             │
-│     ▼             ▼                                             │
-│  AVAILABLE    UNAVAILABLE                                        │
-│     │             │                                             │
-│     ▼             ▼                                             │
-│  Process     ┌────────────┐                                     │
-│  Immediately │ Pending    │                                     │
-│              │ Queue      │                                     │
-│              └────────────┘                                     │
-│                    │                                            │
-│                    ▼                                            │
-│              ┌────────────┐                                     │
-│              │ T24 Online │◀──── Scheduled Check (every 5min)   │
-│              │  Trigger   │                                     │
-│              └────────────┘                                     │
-│                    │                                            │
-│                    ▼                                            │
-│              Process Queued Payments (Priority Order)            │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Handling["T24 AVAILABILITY HANDLING"]
+        A[Payment Request] --> B{T24 Availability<br/>Check}
+
+        B -->|AVAILABLE| C[Process<br/>Immediately]
+
+        B -->|UNAVAILABLE| D[Pending<br/>Queue]
+        D --> E{T24 Online<br/>Trigger}
+        F[Scheduled Check<br/>every 5min] --> E
+        E --> G[Process Queued Payments<br/>Priority Order]
+    end
 ```
 
 ### Challenge 3: Non-Idempotent Operations
@@ -240,20 +422,18 @@ public class T24DebitRequest {
 
 **Solution:** Customer/Account-Based Sharding
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│            ACCOUNT-LEVEL SERIALIZATION                           │
-│                                                                  │
-│   Payment 1 (Account: 123456)  ─┐                               │
-│   Payment 2 (Account: 123456)  ─┼─▶  Shard-3 (serialized)       │
-│   Payment 3 (Account: 123456)  ─┘                               │
-│                                                                  │
-│   Payment 4 (Account: 789012)  ─┐                               │
-│   Payment 5 (Account: 789012)  ─┼─▶  Shard-7 (serialized)       │
-│                                                                  │
-│   Shard = hash(accountNumber) % shardCount                      │
-│   Same account → Same shard → Serial execution                  │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph Serialization["ACCOUNT-LEVEL SERIALIZATION"]
+        P1["Payment 1<br/>(Account: 123456)"] --> S3["Shard-3<br/>(serialized)"]
+        P2["Payment 2<br/>(Account: 123456)"] --> S3
+        P3["Payment 3<br/>(Account: 123456)"] --> S3
+
+        P4["Payment 4<br/>(Account: 789012)"] --> S7["Shard-7<br/>(serialized)"]
+        P5["Payment 5<br/>(Account: 789012)"] --> S7
+    end
+
+    Formula["Shard = hash(accountNumber) % shardCount<br/>Same account → Same shard → Serial execution"]
 ```
 
 ### Challenge 5: Partial Failures
@@ -287,138 +467,99 @@ T24 Reversal = New posting that negates original posting
 
 ### High-Level Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    PAYMENT SAGA PLATFORM                         │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │              TEMPORAL WORKFLOW ENGINE                     │   │
-│  │                                                           │   │
-│  │  ┌─────────────────────────────────────────────────────┐ │   │
-│  │  │           PaymentSagaWorkflow                        │ │   │
-│  │  │                                                       │ │   │
-│  │  │  1. validatePayment()                                │ │   │
-│  │  │  2. checkAccountBalance()  ◀──┐                      │ │   │
-│  │  │  3. reserveFunds()            │ T24Activities        │ │   │
-│  │  │  4. debitSourceAccount() ◀────┤ (Async)              │ │   │
-│  │  │  5. creditDestAccount()  ◀────┤                      │ │   │
-│  │  │  6. completePayment()         │                      │ │   │
-│  │  │                            ◀──┘                      │ │   │
-│  │  │  [Compensation Stack]                                │ │   │
-│  │  │  - reverseCredit()                                   │ │   │
-│  │  │  - reverseDebit()                                    │ │   │
-│  │  │  - releaseReservation()                              │ │   │
-│  │  └─────────────────────────────────────────────────────┘ │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│                              │                                    │
-│                              ▼                                    │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                   T24 ADAPTER LAYER                       │   │
-│  │                                                           │   │
-│  │  ┌───────────────┐  ┌───────────────┐  ┌─────────────┐  │   │
-│  │  │ T24 Gateway   │  │ Request Queue │  │ Idempotency │  │   │
-│  │  │ (Circuit      │  │ (Priority     │  │ Registry    │  │   │
-│  │  │  Breaker)     │  │  Based)       │  │ (Redis/DB)  │  │   │
-│  │  └───────────────┘  └───────────────┘  └─────────────┘  │   │
-│  │                                                           │   │
-│  │  ┌───────────────┐  ┌───────────────┐  ┌─────────────┐  │   │
-│  │  │ T24 Status    │  │ Response      │  │ Reconcile   │  │   │
-│  │  │ Monitor       │  │ Handler       │  │ Service     │  │   │
-│  │  │ (EOD/SOD)     │  │ (Callback)    │  │ (Daily)     │  │   │
-│  │  └───────────────┘  └───────────────┘  └─────────────┘  │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│                              │                                    │
-└──────────────────────────────┼────────────────────────────────────┘
-                               │
-┌──────────────────────────────┼────────────────────────────────────┐
-│                              ▼                                    │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                TEMENOS T24 CORE BANKING                   │   │
-│  │                                                           │   │
-│  │  ┌───────────────┐  ┌───────────────┐  ┌─────────────┐  │   │
-│  │  │ OFS (Open     │  │ TAFJ          │  │ T24 Database│  │   │
-│  │  │ Financial     │  │ (Temenos      │  │ (Account    │  │   │
-│  │  │ Services)     │  │ Application   │  │ Ledger)     │  │   │
-│  │  │ Message Bus   │  │ Framework)    │  │             │  │   │
-│  │  └───────────────┘  └───────────────┘  └─────────────┘  │   │
-│  │                                                           │   │
-│  │  Transaction Types:                                       │   │
-│  │  • AC (Account Transfer)                                  │   │
-│  │  • FT (Funds Transfer)                                    │   │
-│  │  • TT (Teller Transaction)                                │   │
-│  │  • LD (Lending)                                           │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│                         TEMENOS T24                              │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Platform["PAYMENT SAGA PLATFORM"]
+        subgraph Temporal["TEMPORAL WORKFLOW ENGINE"]
+            subgraph Workflow["PaymentSagaWorkflow"]
+                W1["1. validatePayment()"]
+                W2["2. checkAccountBalance()"]
+                W3["3. reserveFunds()"]
+                W4["4. debitSourceAccount()"]
+                W5["5. creditDestAccount()"]
+                W6["6. completePayment()"]
+
+                W1 --> W2 --> W3 --> W4 --> W5 --> W6
+
+                subgraph Compensation["Compensation Stack"]
+                    C1["reverseCredit()"]
+                    C2["reverseDebit()"]
+                    C3["releaseReservation()"]
+                end
+            end
+
+            T24Act["T24Activities<br/>(Async)"]
+            W2 -.-> T24Act
+            W3 -.-> T24Act
+            W4 -.-> T24Act
+            W5 -.-> T24Act
+        end
+
+        subgraph Adapter["T24 ADAPTER LAYER"]
+            G["T24 Gateway<br/>(Circuit Breaker)"]
+            Q["Request Queue<br/>(Priority Based)"]
+            I["Idempotency<br/>Registry<br/>(Redis/DB)"]
+            M["T24 Status<br/>Monitor<br/>(EOD/SOD)"]
+            R["Response<br/>Handler<br/>(Callback)"]
+            Rec["Reconcile<br/>Service<br/>(Daily)"]
+        end
+
+        Temporal --> Adapter
+    end
+
+    subgraph T24["TEMENOS T24 CORE BANKING"]
+        OFS["OFS<br/>(Open Financial<br/>Services)<br/>Message Bus"]
+        TAFJ["TAFJ<br/>(Temenos<br/>Application<br/>Framework)"]
+        DB[(T24 Database<br/>Account Ledger)]
+
+        OFS --> TAFJ --> DB
+
+        TxTypes["Transaction Types:<br/>• AC (Account Transfer)<br/>• FT (Funds Transfer)<br/>• TT (Teller Transaction)<br/>• LD (Lending)"]
+    end
+
+    Adapter --> T24
 ```
 
 ### Sequence Diagram: Payment with T24 Integration
 
-```
-┌────────┐ ┌──────────┐ ┌────────────┐ ┌──────────┐ ┌──────────┐ ┌─────┐
-│ Client │ │ API      │ │ Workflow   │ │ T24      │ │ Request  │ │ T24 │
-│        │ │ Gateway  │ │ (Temporal) │ │ Adapter  │ │ Queue    │ │     │
-└───┬────┘ └────┬─────┘ └─────┬──────┘ └────┬─────┘ └────┬─────┘ └──┬──┘
-    │          │              │             │            │          │
-    │ POST /payments          │             │            │          │
-    │─────────▶│              │             │            │          │
-    │          │ Start        │             │            │          │
-    │          │ Workflow     │             │            │          │
-    │          │─────────────▶│             │            │          │
-    │          │              │             │            │          │
-    │          │ 202 Accepted │             │            │          │
-    │◀─────────│              │             │            │          │
-    │          │              │             │            │          │
-    │          │              │ 1. Validate │            │          │
-    │          │              │────────────▶│            │          │
-    │          │              │    OK       │            │          │
-    │          │              │◀────────────│            │          │
-    │          │              │             │            │          │
-    │          │              │ 2. Check    │            │          │
-    │          │              │    Balance  │            │          │
-    │          │              │─────────────┼───────────▶│          │
-    │          │              │             │  Submit    │ OFS      │
-    │          │              │             │────────────┼─────────▶│
-    │          │              │             │            │          │
-    │          │              │   (Heartbeat while waiting)         │
-    │          │              │◀ ─ ─ ─ ─ ─ ─┼─ ─ ─ ─ ─ ─│          │
-    │          │              │             │            │ Response │
-    │          │              │             │◀───────────┼──────────│
-    │          │              │   Balance OK│            │          │
-    │          │              │◀────────────│            │          │
-    │          │              │             │            │          │
-    │          │              │ 3. Debit    │            │          │
-    │          │              │    Account  │            │          │
-    │          │              │─────────────┼───────────▶│          │
-    │          │              │             │  Submit    │ FT       │
-    │          │              │             │────────────┼─────────▶│
-    │          │              │             │            │          │
-    │          │              │   (Heartbeat while waiting)         │
-    │          │              │             │            │ Posted   │
-    │          │              │             │◀───────────┼──────────│
-    │          │              │   TxnRef    │            │          │
-    │          │              │◀────────────│            │          │
-    │          │              │             │            │          │
-    │          │              │ Push to Compensation Stack          │
-    │          │              │───────────▶│             │          │
-    │          │              │             │            │          │
-    │          │              │ 4. Credit   │            │          │
-    │          │              │    Account  │            │          │
-    │          │              │─────────────┼───────────▶│          │
-    │          │              │             │  Submit    │ FT       │
-    │          │              │             │────────────┼─────────▶│
-    │          │              │             │            │ Posted   │
-    │          │              │             │◀───────────┼──────────│
-    │          │              │   TxnRef    │            │          │
-    │          │              │◀────────────│            │          │
-    │          │              │             │            │          │
-    │          │              │ 5. Complete │            │          │
-    │          │              │────────────▶│            │          │
-    │          │              │             │            │          │
-    │ Webhook: │              │             │            │          │
-    │ Payment  │◀─────────────│             │            │          │
-    │ Complete │              │             │            │          │
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API as API Gateway
+    participant WF as Workflow (Temporal)
+    participant Adapter as T24 Adapter
+    participant Queue as Request Queue
+    participant T24
+
+    Client->>API: POST /payments
+    API->>WF: Start Workflow
+    API-->>Client: 202 Accepted
+
+    WF->>Adapter: 1. Validate
+    Adapter-->>WF: OK
+
+    WF->>Queue: 2. Check Balance
+    Queue->>T24: Submit OFS
+    Note over WF: Heartbeat while waiting
+    T24-->>Queue: Response
+    Queue-->>WF: Balance OK
+
+    WF->>Queue: 3. Debit Account
+    Queue->>T24: Submit FT
+    Note over WF: Heartbeat while waiting
+    T24-->>Queue: Posted
+    Queue-->>WF: TxnRef
+
+    Note over WF: Push to Compensation Stack
+
+    WF->>Queue: 4. Credit Account
+    Queue->>T24: Submit FT
+    T24-->>Queue: Posted
+    Queue-->>WF: TxnRef
+
+    WF->>Adapter: 5. Complete
+
+    WF-->>Client: Webhook: Payment Complete
 ```
 
 ---
@@ -450,26 +591,33 @@ public T24Response debitAccount(T24Request request) {
 
 ### Principle 2: Idempotency at Every Layer
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                 IDEMPOTENCY LAYERS                               │
-│                                                                  │
-│  Layer 1: Workflow Level                                        │
-│  ├── Workflow ID = "payment-{orderId}-{uuid}"                   │
-│  └── Temporal prevents duplicate workflow starts                │
-│                                                                  │
-│  Layer 2: Activity Level                                        │
-│  ├── Idempotency Key = "{orderId}-{step}-{attempt}"            │
-│  └── Redis/DB check before execution                            │
-│                                                                  │
-│  Layer 3: T24 Adapter Level                                     │
-│  ├── T24 Transaction Reference = "{idempotencyKey}"            │
-│  └── T24's OFS deduplication by reference                       │
-│                                                                  │
-│  Layer 4: T24 Core Level                                        │
-│  ├── Account posting reference                                  │
-│  └── T24's internal duplicate detection                         │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Layers["IDEMPOTENCY LAYERS"]
+        direction TB
+
+        subgraph L1["Layer 1: Workflow Level"]
+            L1A["Workflow ID = payment-{orderId}-{uuid}"]
+            L1B["Temporal prevents duplicate workflow starts"]
+        end
+
+        subgraph L2["Layer 2: Activity Level"]
+            L2A["Idempotency Key = {orderId}-{step}-{attempt}"]
+            L2B["Redis/DB check before execution"]
+        end
+
+        subgraph L3["Layer 3: T24 Adapter Level"]
+            L3A["T24 Transaction Reference = {idempotencyKey}"]
+            L3B["T24's OFS deduplication by reference"]
+        end
+
+        subgraph L4["Layer 4: T24 Core Level"]
+            L4A["Account posting reference"]
+            L4B["T24's internal duplicate detection"]
+        end
+
+        L1 --> L2 --> L3 --> L4
+    end
 ```
 
 ### Principle 3: Compensation Over Rollback
@@ -540,24 +688,31 @@ public String calculateTaskQueue(String accountNumber, PaymentPriority priority)
 
 **Accept eventual consistency, implement daily reconciliation.**
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│              RECONCILIATION STRATEGY                             │
-│                                                                  │
-│  Real-Time (Best Effort):                                       │
-│  ├── T24 posts → Webhook/Queue → Update Payment Status          │
-│  └── ~95% of payments reconciled within 5 minutes               │
-│                                                                  │
-│  Near Real-Time (Catch-up):                                     │
-│  ├── Every 15 minutes: Query T24 for pending transactions       │
-│  └── Match against Payment SAGA database                        │
-│                                                                  │
-│  Daily (Full Reconciliation):                                   │
-│  ├── SOD+1: Full extract from T24                               │
-│  ├── Compare with Payment SAGA ledger                           │
-│  ├── Generate discrepancy report                                │
-│  └── Auto-correct where safe, alert for manual review           │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Strategy["RECONCILIATION STRATEGY"]
+        direction TB
+
+        subgraph RT["Real-Time (Best Effort)"]
+            RT1["T24 posts → Webhook/Queue → Update Payment Status"]
+            RT2["~95% of payments reconciled within 5 minutes"]
+        end
+
+        subgraph NRT["Near Real-Time (Catch-up)"]
+            NRT1["Every 15 minutes: Query T24 for pending transactions"]
+            NRT2["Match against Payment SAGA database"]
+        end
+
+        subgraph Daily["Daily (Full Reconciliation)"]
+            D1["SOD+1: Full extract from T24"]
+            D2["Compare with Payment SAGA ledger"]
+            D3["Generate discrepancy report"]
+            D4["Auto-correct where safe, alert for manual review"]
+            D1 --> D2 --> D3 --> D4
+        end
+
+        RT --> NRT --> Daily
+    end
 ```
 
 ### Principle 7: Circuit Breaker for T24 Protection
@@ -756,31 +911,29 @@ public enum T24SystemStatus {
 
 ### Compensation Flow
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│              COMPENSATION DECISION TREE                          │
-│                                                                  │
-│                    Payment Failed                                │
-│                         │                                        │
-│          ┌──────────────┼──────────────┐                        │
-│          ▼              ▼              ▼                        │
-│     T24 Error     Timeout Error    Business Error               │
-│          │              │              │                        │
-│          ▼              ▼              ▼                        │
-│     ┌────────┐    ┌────────────┐  ┌──────────────┐             │
-│     │ Query  │    │ Query T24  │  │ No retry     │             │
-│     │ T24    │    │ for status │  │ Mark failed  │             │
-│     │ Error  │    └──────┬─────┘  │ Compensate   │             │
-│     │ Code   │           │        └──────────────┘             │
-│     └───┬────┘    ┌──────┴──────┐                              │
-│         │         ▼             ▼                               │
-│    ┌────┴────┐  Posted      Not Posted                          │
-│    ▼         ▼    │             │                               │
-│ Retryable  Fatal  ▼             ▼                               │
-│    │         │  Compensate   Continue                           │
-│    ▼         ▼  (reversal)   (no action)                        │
-│  Retry    Compensate                                            │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Decision["COMPENSATION DECISION TREE"]
+        A[Payment Failed]
+
+        A --> B[T24 Error]
+        A --> C[Timeout Error]
+        A --> D[Business Error]
+
+        B --> E[Query T24<br/>Error Code]
+        E --> F[Retryable]
+        E --> G[Fatal]
+        F --> H[Retry]
+        G --> I[Compensate]
+
+        C --> J[Query T24<br/>for status]
+        J --> K[Posted]
+        J --> L[Not Posted]
+        K --> M["Compensate<br/>(reversal)"]
+        L --> N["Continue<br/>(no action)"]
+
+        D --> O["No retry<br/>Mark failed<br/>Compensate"]
+    end
 ```
 
 ---
@@ -930,6 +1083,44 @@ WHERE p.created_at >= CURRENT_DATE - 1
 ---
 
 ## Summary
+
+### Pattern Comparison: 2PC vs TCC vs SAGA for T24
+
+```mermaid
+flowchart TB
+    subgraph Patterns["DISTRIBUTED TRANSACTION PATTERNS"]
+        direction LR
+
+        subgraph TwoPC["2PC"]
+            PC1["Prepare all"]
+            PC2["Commit all"]
+            PC3["❌ T24 has no 2PC"]
+        end
+
+        subgraph TCC["TCC"]
+            TC1["Try (reserve)"]
+            TC2["Confirm/Cancel"]
+            TC3["❌ T24 postings are final"]
+        end
+
+        subgraph SAGA["SAGA"]
+            SG1["Execute step"]
+            SG2["Compensate if fail"]
+            SG3["✓ Works with T24"]
+        end
+    end
+```
+
+| Criteria | 2PC | TCC | SAGA |
+|----------|-----|-----|------|
+| **T24 Compatibility** | ❌ No XA support | ❌ No tentative state | ✓ Works with OFS |
+| **Latency Tolerance** | ❌ Seconds | ❌ Seconds | ✓ Hours/Days |
+| **EOD/SOD Handling** | ❌ Blocks | ❌ Times out | ✓ Queues & retries |
+| **Failure Recovery** | ❌ Coordinator SPOF | ❌ Coordinator SPOF | ✓ Durable workflow |
+| **Resource Locking** | ❌ Holds locks | ❌ Requires tentative locks | ✓ No locks held |
+| **Implementation** | ❌ Impossible | ❌ Complex facade needed | ✓ Direct integration |
+| **Cancel/Rollback** | Rollback | Cancel tentative | Compensate (reversal) |
+| **Verdict for T24** | **Not viable** | **Not recommended** | **Recommended** |
 
 ### Why SAGA Pattern is the Right Fit for T24
 
