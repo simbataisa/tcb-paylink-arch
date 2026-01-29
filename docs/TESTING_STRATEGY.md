@@ -11,6 +11,7 @@ This document defines the comprehensive testing strategy for the Paylink Payment
 - [Service Layer Testing](#service-layer-testing)
 - [Controller Testing](#controller-testing)
 - [Integration Testing](#integration-testing)
+- [Contract Testing](#contract-testing)
 - [Test Utilities](#test-utilities)
 - [Test Execution](#test-execution)
 - [CI/CD Integration](#cicd-integration)
@@ -53,6 +54,7 @@ flowchart TB
 | **Spring Boot Test** | Integration testing |
 | **Temporal Testing** | Workflow unit testing |
 | **MockMvc** | Controller slice testing |
+| **Spring Cloud Contract** | Consumer-driven contract testing |
 
 ---
 
@@ -112,6 +114,7 @@ void debitAccount_insufficientBalance_throwsInsufficientFundsException() { }
 @Tag("e2e")         // End-to-end workflow tests
 @Tag("validation")  // DTO validation tests
 @Tag("controller")  // Controller slice tests
+@Tag("contract")    // Consumer-driven contract tests
 ```
 
 ### Execution Matrix
@@ -121,6 +124,7 @@ void debitAccount_insufficientBalance_throwsInsufficientFundsException() { }
 | Unit | Every commit | < 30s | None |
 | Validation | Every commit | < 10s | None |
 | Controller | Every commit | < 1min | None |
+| Contract | Every commit | < 2min | Producer stubs |
 | Integration | PR merge | 5-10min | TestContainers |
 | E2E | Nightly | 15-20min | Full infrastructure |
 
@@ -592,6 +596,395 @@ class ValidationIntegrationTest {
 
 ---
 
+## Contract Testing
+
+### Overview
+
+Spring Cloud Contract enables consumer-driven contract testing between the orchestrator (consumer) and microservices (producers). This ensures API compatibility across service boundaries.
+
+```mermaid
+flowchart LR
+    subgraph Consumer["CONSUMER (Orchestrator)"]
+        OC[OrderClient]
+        IC[InventoryClient]
+        PGC[PaymentGatewayClient]
+    end
+
+    subgraph Producers["PRODUCERS"]
+        OS[order-service]
+        IS[inventory-service]
+        PGS[payment-gateway-service]
+    end
+
+    OC -->|"Feign"| OS
+    IC -->|"Feign"| IS
+    PGC -->|"Feign"| PGS
+
+    subgraph Verification["CONTRACT VERIFICATION"]
+        Producer["Producer Tests<br/>(Auto-generated)"]
+        Consumer2["Consumer Tests<br/>(Stub Runner)"]
+    end
+```
+
+### Contract Testing Architecture
+
+| Component | Role | Tool |
+|-----------|------|------|
+| order-service | Producer | spring-cloud-contract-verifier |
+| inventory-service | Producer | spring-cloud-contract-verifier |
+| payment-gateway-service | Producer | spring-cloud-contract-verifier |
+| payment-saga-orchestrator | Consumer | spring-cloud-contract-stub-runner |
+
+### Dependencies
+
+**Parent POM:**
+```xml
+<properties>
+    <spring-cloud-contract.version>4.1.0</spring-cloud-contract.version>
+</properties>
+
+<dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-contract-dependencies</artifactId>
+            <version>${spring-cloud-contract.version}</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+    </dependencies>
+</dependencyManagement>
+```
+
+**Producer Services:**
+```xml
+<dependency>
+    <groupId>org.springframework.cloud</groupId>
+    <artifactId>spring-cloud-starter-contract-verifier</artifactId>
+    <scope>test</scope>
+</dependency>
+
+<build>
+    <plugins>
+        <plugin>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-contract-maven-plugin</artifactId>
+            <version>${spring-cloud-contract.version}</version>
+            <extensions>true</extensions>
+            <configuration>
+                <testFramework>JUNIT5</testFramework>
+                <baseClassForTests>com.payment.order.contract.ContractTestBase</baseClassForTests>
+            </configuration>
+        </plugin>
+    </plugins>
+</build>
+```
+
+**Consumer (Orchestrator):**
+```xml
+<dependency>
+    <groupId>org.springframework.cloud</groupId>
+    <artifactId>spring-cloud-starter-contract-stub-runner</artifactId>
+    <scope>test</scope>
+</dependency>
+```
+
+### Contract Definition (Groovy DSL)
+
+Contracts are defined in `src/test/resources/contracts/` in each producer service.
+
+**Example: order-service/src/test/resources/contracts/order/validateOrder.groovy**
+```groovy
+package contracts.order
+
+import org.springframework.cloud.contract.spec.Contract
+
+Contract.make {
+    name "validate_order_success"
+    description "Should return validation result for valid order"
+
+    request {
+        method POST()
+        url "/api/orders/validate"
+        headers {
+            contentType applicationJson()
+        }
+        body([
+            orderId: $(consumer(regex('[A-Z]{3}-[0-9]{6}')), producer('ORD-123456')),
+            customerId: $(consumer(regex('[A-Z]{4}-[0-9]{6}')), producer('CUST-000001')),
+            amount: $(consumer(regex('[0-9]+\\.[0-9]{2}')), producer('100.00')),
+            currency: $(consumer(regex('[A-Z]{3}')), producer('USD')),
+            items: [[
+                sku: 'PROD-001',
+                name: 'Test Product',
+                quantity: 2,
+                price: 50.00
+            ]]
+        ])
+    }
+
+    response {
+        status OK()
+        headers {
+            contentType applicationJson()
+        }
+        body([
+            orderId: fromRequest().body('$.orderId'),
+            valid: true,
+            validationErrors: []
+        ])
+    }
+}
+```
+
+**Example: inventory-service/src/test/resources/contracts/inventory/reserveInventory.groovy**
+```groovy
+Contract.make {
+    name "reserve_inventory_success"
+
+    request {
+        method POST()
+        url "/api/inventory/reserve"
+        headers { contentType applicationJson() }
+        body([
+            orderId: $(consumer(regex('[A-Z]{3}-[0-9]+')), producer('ORD-123')),
+            items: [[
+                sku: 'PROD-001',
+                quantity: 5
+            ]]
+        ])
+    }
+
+    response {
+        status OK()
+        body([
+            reservationId: $(producer(regex('[a-f0-9-]{36}'))),
+            orderId: fromRequest().body('$.orderId'),
+            status: 'RESERVED',
+            reservedItems: [[
+                sku: 'PROD-001',
+                reservedQuantity: 5
+            ]]
+        ])
+    }
+}
+```
+
+**Example: payment-gateway-service/src/test/resources/contracts/payment/authorizePayment.groovy**
+```groovy
+Contract.make {
+    name "authorize_payment_success"
+
+    request {
+        method POST()
+        url "/api/payments/authorize"
+        headers { contentType applicationJson() }
+        body([
+            orderId: $(consumer(regex('[A-Z]{3}-[0-9]+')), producer('ORD-123')),
+            amount: $(consumer(regex('[0-9]+\\.[0-9]{2}')), producer('100.00')),
+            currency: 'USD',
+            paymentMethod: 'CREDIT_CARD'
+        ])
+    }
+
+    response {
+        status OK()
+        body([
+            authorizationId: $(producer(regex('AUTH-[A-Z0-9]{8}'))),
+            orderId: fromRequest().body('$.orderId'),
+            status: 'AUTHORIZED',
+            authorizedAmount: fromRequest().body('$.amount')
+        ])
+    }
+}
+```
+
+### Producer Base Test Class
+
+Each producer service needs a base test class for contract verification:
+
+```java
+package com.payment.order.contract;
+
+import com.payment.order.controller.OrderController;
+import com.payment.order.service.OrderService;
+import io.restassured.module.mockmvc.RestAssuredMockMvc;
+import org.junit.jupiter.api.BeforeEach;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.ActiveProfiles;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
+
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
+@ActiveProfiles("contract-test")
+public abstract class ContractTestBase {
+
+    @Autowired
+    private OrderController orderController;
+
+    @MockBean
+    private OrderService orderService;
+
+    @BeforeEach
+    void setup() {
+        RestAssuredMockMvc.standaloneSetup(orderController);
+
+        // Setup mock responses for contract scenarios
+        when(orderService.validateOrder(any())).thenAnswer(invocation -> {
+            var request = invocation.getArgument(0);
+            return createValidationResult(request);
+        });
+    }
+
+    private OrderValidationResult createValidationResult(Object request) {
+        // Return appropriate mock response based on request
+        return OrderValidationResult.builder()
+            .orderId("ORD-123456")
+            .valid(true)
+            .validationErrors(List.of())
+            .build();
+    }
+}
+```
+
+### Consumer Stub Runner Test
+
+The orchestrator verifies Feign clients against producer stubs:
+
+```java
+package com.payment.saga.contract;
+
+import com.payment.saga.client.OrderClient;
+import com.payment.saga.client.InventoryClient;
+import com.payment.saga.client.PaymentGatewayClient;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.cloud.contract.stubrunner.spring.AutoConfigureStubRunner;
+import org.springframework.cloud.contract.stubrunner.spring.StubRunnerProperties;
+import org.springframework.test.context.ActiveProfiles;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
+@AutoConfigureStubRunner(
+    ids = {
+        "com.payment:order-service:+:stubs:8081",
+        "com.payment:inventory-service:+:stubs:8082",
+        "com.payment:payment-gateway-service:+:stubs:8083"
+    },
+    stubsMode = StubRunnerProperties.StubsMode.LOCAL
+)
+@ActiveProfiles("contract-test")
+@Tag("contract")
+class FeignClientContractTest {
+
+    @Autowired
+    private OrderClient orderClient;
+
+    @Autowired
+    private InventoryClient inventoryClient;
+
+    @Autowired
+    private PaymentGatewayClient paymentGatewayClient;
+
+    @Test
+    void orderClient_validateOrder_matchesContract() {
+        var request = createValidOrderRequest();
+        var response = orderClient.validateOrder(request);
+
+        assertThat(response.isValid()).isTrue();
+        assertThat(response.getValidationErrors()).isEmpty();
+    }
+
+    @Test
+    void inventoryClient_reserveInventory_matchesContract() {
+        var request = createReservationRequest();
+        var response = inventoryClient.reserveInventory(request);
+
+        assertThat(response.getStatus()).isEqualTo("RESERVED");
+        assertThat(response.getReservationId()).isNotBlank();
+    }
+
+    @Test
+    void paymentGatewayClient_authorizePayment_matchesContract() {
+        var request = createAuthorizationRequest();
+        var response = paymentGatewayClient.authorizePayment(request);
+
+        assertThat(response.getStatus()).isEqualTo("AUTHORIZED");
+        assertThat(response.getAuthorizationId()).matches("AUTH-[A-Z0-9]+");
+    }
+
+    @Test
+    void paymentGatewayClient_capturePayment_matchesContract() {
+        var request = createCaptureRequest();
+        var response = paymentGatewayClient.capturePayment(request);
+
+        assertThat(response.getStatus()).isEqualTo("CAPTURED");
+    }
+}
+```
+
+### Contract Scenario Matrix
+
+| Service | Endpoint | Success Contract | Error Contract |
+|---------|----------|-----------------|----------------|
+| order-service | POST /api/orders/validate | validateOrder.groovy | validateOrderInvalid.groovy |
+| order-service | PUT /api/orders/{id}/status | updateOrderStatus.groovy | - |
+| order-service | POST /api/orders/{id}/cancel | cancelOrder.groovy | - |
+| inventory-service | POST /api/inventory/reserve | reserveInventory.groovy | reserveInventoryInsufficient.groovy |
+| inventory-service | POST /api/inventory/release | releaseInventory.groovy | - |
+| payment-gateway | POST /api/payments/authorize | authorizePayment.groovy | authorizePaymentDeclined.groovy |
+| payment-gateway | POST /api/payments/capture | capturePayment.groovy | - |
+| payment-gateway | POST /api/payments/void | voidPayment.groovy | - |
+| payment-gateway | POST /api/payments/refund | refundPayment.groovy | - |
+
+### Contract Test Profile
+
+**application-contract-test.yml:**
+```yaml
+spring:
+  cloud:
+    discovery:
+      enabled: false
+  main:
+    lazy-initialization: true
+
+# For consumer tests - point Feign clients to stub ports
+order-service:
+  ribbon:
+    listOfServers: localhost:8081
+inventory-service:
+  ribbon:
+    listOfServers: localhost:8082
+payment-gateway-service:
+  ribbon:
+    listOfServers: localhost:8083
+```
+
+### Running Contract Tests
+
+```bash
+# Generate stubs from producer services
+mvn clean install -pl order-service,inventory-service,payment-gateway-service
+
+# Run consumer contract tests
+mvn test -pl payment-saga-orchestrator -Dtest="FeignClientContractTest"
+
+# Run all contract tests
+mvn test -Dgroups=contract
+
+# Verify stub generation
+ls order-service/target/stubs/
+ls inventory-service/target/stubs/
+ls payment-gateway-service/target/stubs/
+```
+
+---
+
 ## Test Utilities
 
 ### TestDataBuilder
@@ -690,6 +1083,13 @@ mvn test -Dgroups=validation
 # Run only controller tests
 mvn test -Dgroups=controller
 
+# Run only contract tests
+mvn test -Dgroups=contract
+
+# Generate producer stubs and run consumer contract tests
+mvn clean install -pl order-service,inventory-service,payment-gateway-service
+mvn test -pl payment-saga-orchestrator -Dtest="FeignClientContractTest"
+
 # Run only integration tests
 mvn test -Dgroups=integration
 
@@ -745,8 +1145,22 @@ jobs:
       - name: Run Unit Tests
         run: mvn test -Dgroups=unit,validation,controller
 
-  integration-tests:
+  contract-tests:
     needs: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+      - name: Generate Producer Stubs
+        run: mvn clean install -pl order-service,inventory-service,payment-gateway-service -DskipTests=false
+      - name: Run Consumer Contract Tests
+        run: mvn test -pl payment-saga-orchestrator -Dgroups=contract
+
+  integration-tests:
+    needs: contract-tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
