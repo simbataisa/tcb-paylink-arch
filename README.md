@@ -913,6 +913,307 @@ Example: customerId="CUST-12345", priority=NORMAL, shardCount=16
 - `PaymentRouter.calculateShardedTaskQueue()` - Routes payments to appropriate shard
 - [TEMPORAL_SCALING_ARCHITECTURE.md](docs/TEMPORAL_SCALING_ARCHITECTURE.md) - Detailed architecture with Cassandra migration guide
 
+### Principle 12: Defense-in-Depth Authentication
+
+Authentication is enforced at multiple layers to prevent single points of failure:
+
+```mermaid
+flowchart TB
+    subgraph Layer1["Layer 1: API Gateway (Kong)"]
+        L1A["OAuth 2.0 Token Introspection"]
+        L1B["Rate Limiting (per-tenant)"]
+        L1C["Bot Protection"]
+    end
+
+    subgraph Layer2["Layer 2: Application (Spring Security)"]
+        L2A["JWT Validation"]
+        L2B["Permission-Based Authorization (@PreAuthorize)"]
+        L2C["Tenant Context Extraction"]
+    end
+
+    subgraph Layer3["Layer 3: Data (PostgreSQL RLS)"]
+        L3A["Row-Level Security Policies"]
+        L3B["Tenant Isolation"]
+    end
+
+    Layer1 --> Layer2 --> Layer3
+```
+
+**Implementation in this codebase:**
+- Kong OAuth 2.0 plugin validates tokens at the edge
+- Spring Security Resource Server validates JWT and extracts permissions
+- `@PreAuthorize` annotations enforce fine-grained access control
+- PostgreSQL RLS policies enforce tenant isolation at the database level
+
+### Principle 13: Zero Trust Service Communication
+
+All internal service-to-service communication uses mTLS with SPIFFE/SPIRE identities:
+
+```mermaid
+flowchart LR
+    subgraph SPIRE["SPIFFE/SPIRE Identity"]
+        S1["spiffe://paylink.com/ns/payment-saga/sa/orchestrator"]
+        S2["spiffe://paylink.com/ns/payment-saga/sa/order-service"]
+        S3["spiffe://paylink.com/ns/payment-saga/sa/inventory-service"]
+        S4["spiffe://paylink.com/ns/payment-saga/sa/payment-gateway"]
+    end
+
+    O["Orchestrator"] <-->|mTLS| OS["Order Service"]
+    O <-->|mTLS| IS["Inventory Service"]
+    O <-->|mTLS| PG["Payment Gateway"]
+```
+
+**Key Principles:**
+- Never trust, always verify - every request is authenticated
+- Kubernetes NetworkPolicies enforce least-privilege communication
+- No plaintext traffic within the cluster
+- Automatic certificate rotation via SPIRE
+
+**Implementation in this codebase:**
+- `MtlsConfiguration` - Configures SPIFFE-based mTLS for Feign clients
+- `k8s/base/network-policies/` - NetworkPolicies for each service
+- `k8s/base/spire/` - SPIRE server and agent deployment
+
+### Principle 14: Webhook Security
+
+All external payment provider webhooks are verified using provider-specific signature algorithms:
+
+```mermaid
+flowchart TB
+    subgraph Verification["WEBHOOK VERIFICATION FLOW"]
+        W1["1. IP Allowlist Check<br/>Only accept from provider IPs"]
+        W2["2. Signature Verification<br/>HMAC-SHA256 or RSA-SHA256"]
+        W3["3. Timestamp Validation<br/>Reject stale webhooks (>5 min)"]
+        W4["4. Idempotency Check<br/>Deduplicate by event ID"]
+        W5["5. Process Event<br/>Signal workflow"]
+
+        W1 --> W2 --> W3 --> W4 --> W5
+    end
+```
+
+| Provider | Algorithm | Status |
+|----------|-----------|--------|
+| Stripe | HMAC-SHA256 | Implemented |
+| PayPal | RSA-SHA256 (API verification) | Implemented |
+| Adyen | HMAC-SHA256 | Implemented |
+| Square | HMAC-SHA256 | Implemented |
+
+**Implementation in this codebase:**
+- `WebhookSecurityFilter` - IP allowlisting
+- `StripeWebhookProcessor`, `PayPalWebhookProcessor`, etc. - Signature verification
+- `WebhookIdempotencyService` - Deduplication
+
+### Principle 15: Secrets Management
+
+No secrets are stored in plain Kubernetes YAML or environment variables. All credentials use External Secrets Operator with AWS Secrets Manager:
+
+```mermaid
+flowchart LR
+    subgraph AWS["AWS Secrets Manager"]
+        S1["paylink/payment-gateway/stripe"]
+        S2["paylink/payment-gateway/paypal"]
+        S3["paylink/databases/postgres"]
+    end
+
+    subgraph K8s["Kubernetes"]
+        ESO["External Secrets Operator"]
+        Secret["K8s Secret"]
+        Pod["Application Pod"]
+
+        ESO -->|Sync| Secret
+        Secret -->|Mount| Pod
+    end
+
+    AWS -->|Fetch| ESO
+```
+
+**Key Features:**
+- Automatic rotation with zero downtime
+- Audit trail of secret access
+- Encryption at rest and in transit
+- RBAC for secret access
+
+**Implementation in this codebase:**
+- `k8s/base/external-secrets/` - ExternalSecret manifests
+- Application properties reference secrets via environment variables
+
+### Principle 16: Multi-Tenant Data Isolation
+
+All tenant data is isolated at the database level using PostgreSQL Row-Level Security (RLS):
+
+```mermaid
+flowchart TB
+    subgraph Flow["REQUEST FLOW"]
+        R1["Request with JWT"]
+        R2["Extract tenant_id from JWT"]
+        R3["Set PostgreSQL session variable"]
+        R4["RLS policy filters all queries"]
+    end
+
+    R1 --> R2 --> R3 --> R4
+
+    subgraph RLS["ROW-LEVEL SECURITY"]
+        P1["CREATE POLICY tenant_isolation ON payment_requests<br/>USING (tenant_id = current_setting('app.current_tenant'))"]
+    end
+```
+
+**Guarantees:**
+- Tenants cannot access each other's data even with SQL injection
+- All queries automatically filtered by tenant
+- Admin bypass available for cross-tenant operations
+
+**Implementation in this codebase:**
+- `TenantContextFilter` - Extracts and sets tenant context
+- `TenantAwareEntityListener` - Automatically sets tenant_id on persist
+- `V10__add_rls_policies.sql` - Database migration for RLS policies
+
+### Principle 17: Customer Consent Management (Open Banking)
+
+SBV Circular 64 mandates explicit, granular customer consent for third-party data access:
+
+```mermaid
+flowchart TB
+    subgraph Consent["CONSENT LIFECYCLE"]
+        C1["TPP Requests Consent"]
+        C2["Customer Reviews Scope"]
+        C3["Customer Authorizes (SCA)"]
+        C4["Consent Active (max 90 days)"]
+        C5["Customer Revokes / Expires"]
+    end
+
+    C1 --> C2 --> C3 --> C4 --> C5
+
+    subgraph Scope["CONSENT PERMISSIONS"]
+        S1["ACCOUNTS - View account list"]
+        S2["BALANCES - View balances"]
+        S3["TRANSACTIONS - View history"]
+        S4["PAYMENTS - Initiate payments"]
+    end
+```
+
+**Consent Requirements (SBV Circular 64):**
+- Granular permissions (accounts, balances, transactions, payments)
+- Time-bound access (maximum 90 days)
+- Customer-revocable at any time
+- Strong Customer Authentication (SCA) for authorization
+
+**Implementation in this codebase:**
+- `ConsentEntity` / `ConsentRepository` - Consent persistence with expiry
+- `ConsentService` - Consent lifecycle management
+- `ConsentController` - Open Banking consent APIs
+- `ConsentValidationFilter` - Validates consent_id in JWT claims
+
+### Principle 18: Third-Party Provider Registration (Open Banking)
+
+All TPPs must be registered and validated before accessing customer data:
+
+```mermaid
+flowchart TB
+    subgraph TPP["TPP REGISTRATION FLOW"]
+        T1["TPP Submits Registration"]
+        T2["Validate SBV License Number"]
+        T3["Verify Certificate"]
+        T4["Issue API Credentials"]
+        T5["Assign API Tier Access"]
+    end
+
+    T1 --> T2 --> T3 --> T4 --> T5
+
+    subgraph Status["TPP STATUS"]
+        S1["PENDING - Awaiting verification"]
+        S2["ACTIVE - Authorized access"]
+        S3["SUSPENDED - Temporarily blocked"]
+        S4["REVOKED - Permanently blocked"]
+    end
+```
+
+**TPP Verification (SBV Circular 64):**
+- SBV license number validation
+- mTLS client certificate authentication
+- API tier restrictions (Tier 1/2/3)
+- Rate limiting per TPP license
+
+**Implementation in this codebase:**
+- `ThirdPartyProviderEntity` / `TppRepository` - TPP persistence
+- `TppRegistrationService` - TPP onboarding and credential management
+- `TppController` - TPP management APIs
+- Kong mTLS plugin - Certificate-based TPP authentication
+
+### Principle 19: Data Access Audit (Open Banking)
+
+All customer data access must be logged for regulatory compliance:
+
+```mermaid
+flowchart TB
+    subgraph Audit["AUDIT TRAIL"]
+        A1["Request Received"]
+        A2["Extract Context<br/>(TPP, Customer, Consent)"]
+        A3["Log to Immutable Table"]
+        A4["Process Request"]
+        A5["Log Response Status"]
+    end
+
+    A1 --> A2 --> A3 --> A4 --> A5
+
+    subgraph Fields["AUDIT FIELDS"]
+        F1["timestamp - When accessed"]
+        F2["tpp_id - Who accessed"]
+        F3["customer_id - Whose data"]
+        F4["consent_id - Authorization"]
+        F5["resource_type - What data"]
+        F6["correlation_id - Trace link"]
+    end
+```
+
+**Audit Requirements (SBV Circular 64):**
+- All API access logged to immutable table
+- 7-year retention period
+- No UPDATE/DELETE on audit records
+- SBV reporting capability
+
+**Implementation in this codebase:**
+- `DataAccessAuditEntity` - Audit record persistence
+- `DataAccessAuditService` - Audit logging service
+- `DataAccessAuditFilter` - Automatic request/response logging
+- Database trigger - Prevents audit record modification
+
+### Principle 20: API Tiering (Open Banking)
+
+Open Banking APIs are classified into tiers with different access requirements:
+
+```mermaid
+flowchart TB
+    subgraph Tiers["API TIERS (SBV Circular 64)"]
+        T1["Tier 1: Information Query<br/>• Account list<br/>• Product catalog<br/>• Branch locations"]
+        T2["Tier 2: Consent-Based (AIS)<br/>• Account details<br/>• Transaction history<br/>• Balance inquiry"]
+        T3["Tier 3: Payment Initiation (PIS)<br/>• Payment initiation<br/>• Payment status<br/>• Strong Customer Auth"]
+    end
+
+    subgraph Access["ACCESS REQUIREMENTS"]
+        A1["Tier 1: TPP Registration"]
+        A2["Tier 2: + Customer Consent"]
+        A3["Tier 3: + SCA Confirmation"]
+    end
+
+    T1 --> A1
+    T2 --> A2
+    T3 --> A3
+```
+
+**API Tier Classification:**
+
+| Tier | Category | Consent Required | SCA Required |
+|:-----|:---------|:-----------------|:-------------|
+| Tier 1 | Information Query | No | No |
+| Tier 2 | Account Information Services (AIS) | Yes | No |
+| Tier 3 | Payment Initiation Services (PIS) | Yes | Yes |
+
+**Implementation in this codebase:**
+- `AccountInfoController` - Tier 1 APIs
+- `TransactionController` - Tier 2 APIs
+- `PaymentInitiationController` - Tier 3 APIs
+- `OpenBankingSecurityConfig` - Tier-based access control
+
 ### Architecture Validation
 
 These principles have been validated through:
@@ -930,6 +1231,15 @@ These principles have been validated through:
 | Trace Resumption | `CorrelationRegistry`, `TraceContextRestorer` | `WebhookEventConsumerTest` |
 | Unified Error Handling | `PaymentErrorCode`, `GlobalExceptionHandler`, `ErrorCodeMappingService` | `GlobalExceptionHandlerTest` |
 | Horizontal Scaling | `ShardingConfiguration`, `ShardedWorkerFactory`, `PaymentRouter` sharding | `PaymentRouterTest` sharding tests |
+| Defense-in-Depth Auth | Kong + Spring Security + RLS | Security integration tests |
+| Zero Trust mTLS | SPIFFE/SPIRE, NetworkPolicies | Infrastructure tests |
+| Webhook Security | Signature verification, IP allowlisting | `WebhookProcessor*Test` |
+| Secrets Management | External Secrets Operator | Deployment validation |
+| Multi-Tenant Isolation | PostgreSQL RLS, TenantContext | `TenantIsolationTest` |
+| Customer Consent Management | `ConsentEntity`, `ConsentService`, `ConsentValidationFilter` | `ConsentServiceTest` |
+| TPP Registration | `ThirdPartyProviderEntity`, `TppRegistrationService`, Kong mTLS | `TppRegistrationServiceTest` |
+| Data Access Audit | `DataAccessAuditEntity`, `DataAccessAuditFilter`, immutable table | `DataAccessAuditServiceTest` |
+| API Tiering | Tier 1/2/3 controllers, `OpenBankingSecurityConfig` | Open Banking API tests |
 
 ## Module Structure
 
@@ -1995,6 +2305,9 @@ kubectl logs -l app=kong -n kong
 - [Temporal vs Kafka Integration](docs/temporal-kafka-integration.md) - When to use each and how they complement each other
 - [Anti-Pattern Deep Dive](docs/anti-pattern-deep-dive.md) - Temporal workflow state best practices
 - [Hybrid SAGA Pattern Guide](docs/pattern1-comprehensive-guide.md) - Temporal + Spring State Machine pattern
+
+### Security
+- [Security Architecture](docs/Security.md) - Comprehensive security architecture covering authentication, mTLS, webhook security, secrets management, and PCI-DSS compliance
 
 ### Operations & Observability
 - [Observability Guide](docs/Observability.md) - Correlation tracking, metrics, dashboards, and alerting

@@ -5,6 +5,7 @@ This document defines the comprehensive testing strategy for the Paylink Payment
 ## Table of Contents
 
 - [Overview](#overview)
+- [Quality Gates (Quality.md Compliance)](#quality-gates-qualitymd-compliance)
 - [Test Architecture](#test-architecture)
 - [Test Categories](#test-categories)
 - [DTO Validation Testing](#dto-validation-testing)
@@ -55,6 +56,296 @@ flowchart TB
 | **Temporal Testing** | Workflow unit testing |
 | **MockMvc** | Controller slice testing |
 | **Spring Cloud Contract** | Consumer-driven contract testing |
+
+---
+
+## Quality Gates (Quality.md Compliance)
+
+This section aligns with the [Quality.md](Quality.md) engineering framework. All PRs must pass these mandatory gates.
+
+### Gate Summary
+
+| Gate | Requirement | Enforcement |
+|------|-------------|-------------|
+| **JaCoCo Line Coverage** | ≥ 75% | Pre-push + CI |
+| **JaCoCo Branch Coverage** | ≥ 65% | Pre-push + CI |
+| **PIT Mutation Score (Overall)** | ≥ 70% | CI |
+| **PIT Mutation Score (service/domain)** | ≥ 80% | CI |
+| **Constraint Coverage** | 100% | Pre-push + CI |
+| **Controller @Valid Coverage** | 100% | Pre-push + CI |
+
+### 1. JaCoCo Configuration (Maven)
+
+```xml
+<!-- pom.xml -->
+<plugin>
+    <groupId>org.jacoco</groupId>
+    <artifactId>jacoco-maven-plugin</artifactId>
+    <version>0.8.12</version>
+    <executions>
+        <execution>
+            <id>prepare-agent</id>
+            <goals><goal>prepare-agent</goal></goals>
+        </execution>
+        <execution>
+            <id>report</id>
+            <phase>test</phase>
+            <goals><goal>report</goal></goals>
+        </execution>
+        <execution>
+            <id>check</id>
+            <goals><goal>check</goal></goals>
+            <configuration>
+                <rules>
+                    <rule>
+                        <element>BUNDLE</element>
+                        <limits>
+                            <limit>
+                                <counter>LINE</counter>
+                                <value>COVEREDRATIO</value>
+                                <minimum>0.75</minimum>
+                            </limit>
+                            <limit>
+                                <counter>BRANCH</counter>
+                                <value>COVEREDRATIO</value>
+                                <minimum>0.65</minimum>
+                            </limit>
+                        </limits>
+                    </rule>
+                </rules>
+                <excludes>
+                    <exclude>**/*Dto.*</exclude>
+                    <exclude>**/*Config.*</exclude>
+                    <exclude>**/*Application.*</exclude>
+                </excludes>
+            </configuration>
+        </execution>
+    </executions>
+</plugin>
+```
+
+### 2. PIT Mutation Testing (Maven)
+
+```xml
+<!-- pom.xml -->
+<plugin>
+    <groupId>org.pitest</groupId>
+    <artifactId>pitest-maven</artifactId>
+    <version>1.15.0</version>
+    <dependencies>
+        <dependency>
+            <groupId>org.pitest</groupId>
+            <artifactId>pitest-junit5-plugin</artifactId>
+            <version>1.2.1</version>
+        </dependency>
+    </dependencies>
+    <configuration>
+        <targetClasses>
+            <param>com.payment.*</param>
+        </targetClasses>
+        <targetTests>
+            <param>com.payment.*</param>
+        </targetTests>
+        <mutators>
+            <mutator>STRONGER</mutator>
+        </mutators>
+        <excludedClasses>
+            <param>**.*Dto</param>
+            <param>**.*Config*</param>
+            <param>**.*Application*</param>
+        </excludedClasses>
+        <excludedTestClasses>
+            <param>**.*IT*</param>
+            <param>**.*IntegrationTest*</param>
+        </excludedTestClasses>
+        <threads>4</threads>
+        <outputFormats>
+            <outputFormat>HTML</outputFormat>
+            <outputFormat>XML</outputFormat>
+        </outputFormats>
+        <timestampedReports>false</timestampedReports>
+        <mutationThreshold>70</mutationThreshold>
+    </configuration>
+</plugin>
+```
+
+**Run mutation testing:**
+```bash
+mvn org.pitest:pitest-maven:mutationCoverage
+```
+
+### 3. Constraint Coverage Gate
+
+Automated scanner ensures 100% negative test coverage for all Jakarta Bean Validation constraints.
+
+**Naming Convention (mandatory):**
+```
+invalid_<fieldName>_<ConstraintName>_fails
+```
+
+**Example:**
+```java
+@Test
+void invalid_orderId_NotBlank_fails() {
+    var dto = TestDataBuilder.validOrderRequest().orderId("").build();
+    var violations = validator.validate(dto);
+    assertThat(violations)
+        .extracting(v -> v.getPropertyPath().toString())
+        .contains("orderId");
+}
+```
+
+**Automated Scanner: `ConstraintCoverageTest.java`**
+
+```java
+package com.payment.saga.validation;
+
+import jakarta.validation.Constraint;
+import org.junit.jupiter.api.Test;
+import org.reflections.Reflections;
+
+import java.lang.annotation.Annotation;
+import java.lang.reflect.Field;
+import java.util.*;
+import java.util.stream.Collectors;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+public class ConstraintCoverageTest {
+
+    private static final String[] DTO_PACKAGES = {
+        "com.payment.saga.api.dto",
+        "com.payment.order.api.dto",
+        "com.payment.inventory.api.dto",
+        "com.payment.gateway.api.dto"
+    };
+
+    @Test
+    void all_constraints_have_negative_tests() {
+        Set<String> required = new HashSet<>();
+
+        for (String pkg : DTO_PACKAGES) {
+            Reflections reflections = new Reflections(pkg);
+            Set<Class<?>> dtoClasses = reflections.getSubTypesOf(Object.class).stream()
+                .filter(c -> c.getSimpleName().endsWith("Request")
+                          || c.getSimpleName().endsWith("Response")
+                          || c.getSimpleName().endsWith("Details"))
+                .collect(Collectors.toSet());
+
+            for (Class<?> dto : dtoClasses) {
+                for (Field f : dto.getDeclaredFields()) {
+                    for (Annotation a : f.getAnnotations()) {
+                        if (a.annotationType().isAnnotationPresent(Constraint.class)) {
+                            required.add(testName(dto, f, a));
+                        }
+                    }
+                }
+            }
+        }
+
+        Set<String> actual = allTestMethodNames();
+        Set<String> missing = required.stream()
+            .filter(r -> !actual.contains(r))
+            .collect(Collectors.toSet());
+
+        assertThat(missing)
+            .as("Missing negative tests for constraints: " + missing)
+            .isEmpty();
+    }
+
+    private Set<String> allTestMethodNames() {
+        Reflections reflections = new Reflections("com.payment");
+        return reflections.getMethodsAnnotatedWith(Test.class).stream()
+            .map(m -> m.getDeclaringClass().getSimpleName() + "#" + m.getName())
+            .collect(Collectors.toSet());
+    }
+
+    private String testName(Class<?> dto, Field f, Annotation a) {
+        return dto.getSimpleName() + "#invalid_" + f.getName()
+             + "_" + a.annotationType().getSimpleName() + "_fails";
+    }
+}
+```
+
+### 4. Controller Validation Coverage Gate
+
+Every controller endpoint with `@Valid` must have a 400 error test.
+
+**Naming Convention (mandatory):**
+```
+<ControllerName>ValidationTest#invalidPayload_returns400
+```
+
+**Automated Scanner: `ControllerValidationCoverageTest.java`**
+
+```java
+package com.payment.saga.validation;
+
+import jakarta.validation.Valid;
+import org.junit.jupiter.api.Test;
+import org.reflections.Reflections;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.lang.reflect.Method;
+import java.lang.reflect.Parameter;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+public class ControllerValidationCoverageTest {
+
+    @Test
+    void all_validated_controller_methods_have_400_tests() {
+        Reflections reflections = new Reflections("com.payment");
+        Set<Class<?>> controllers = reflections.getTypesAnnotatedWith(RestController.class);
+
+        Set<String> requiredTests = controllers.stream()
+            .flatMap(c -> Set.of(c.getDeclaredMethods()).stream()
+                .filter(this::hasValidParameter)
+                .map(m -> c.getSimpleName() + "ValidationTest#invalidPayload_returns400"))
+            .collect(Collectors.toSet());
+
+        Set<String> actualTests = reflections.getMethodsAnnotatedWith(Test.class).stream()
+            .map(m -> m.getDeclaringClass().getSimpleName() + "#" + m.getName())
+            .collect(Collectors.toSet());
+
+        Set<String> missing = requiredTests.stream()
+            .filter(r -> !actualTests.contains(r))
+            .collect(Collectors.toSet());
+
+        assertThat(missing)
+            .as("Missing controller 400 validation tests: " + missing)
+            .isEmpty();
+    }
+
+    private boolean hasValidParameter(Method m) {
+        for (Parameter p : m.getParameters()) {
+            if (p.isAnnotationPresent(Valid.class)) return true;
+        }
+        return false;
+    }
+}
+```
+
+### Quality Gate Verification Commands
+
+```bash
+# Run all quality gates
+mvn clean test jacoco:check
+
+# Run mutation testing
+mvn org.pitest:pitest-maven:mutationCoverage
+
+# Check constraint coverage
+mvn test -Dtest=ConstraintCoverageTest
+
+# Check controller validation coverage
+mvn test -Dtest=ControllerValidationCoverageTest
+
+# Full quality verification
+mvn clean verify org.pitest:pitest-maven:mutationCoverage
+```
 
 ---
 
