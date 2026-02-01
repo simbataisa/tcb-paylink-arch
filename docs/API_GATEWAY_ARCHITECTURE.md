@@ -485,6 +485,15 @@ sequenceDiagram
 ## Related Documentation
 
 - [Security Architecture](./Security.md) - Overall security design
-- [SPIFFE/SPIRE Guide](./SPIFFE_SPIRE_GUIDE.md) - Workload identity
 - [Kong Migration Plan](./KONG_MIGRATION_PLAN.md) - Migration from Eureka
 - [Temporal Scaling Architecture](./TEMPORAL_SCALING_ARCHITECTURE.md) - Workflow scaling
+
+### Istio Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `k8s/base/istio/peer-authentication.yaml` | mTLS STRICT mode |
+| `k8s/base/istio/authorization-policies.yaml` | Service access control |
+| `k8s/base/istio/destination-rules.yaml` | Traffic policies |
+| `k8s/base/istio/virtual-services.yaml` | Routing rules |
+| `k8s/base/istio/service-entries.yaml` | External services |

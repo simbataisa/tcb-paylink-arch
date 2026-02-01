@@ -68,7 +68,7 @@ flowchart TB
             O5["Idempotency Protection"]
         end
 
-        subgraph Services["Microservices (mTLS via SPIFFE/SPIRE)"]
+        subgraph Services["Microservices (mTLS via Istio)"]
             S1["Order Service<br/>• RLS Enabled<br/>• Tenant-Aware"]
             S2["Inventory Service<br/>• RLS Enabled<br/>• Tenant-Aware"]
             S3["Payment Gateway<br/>• Webhook Verification<br/>• IP Allowlisting"]
@@ -98,10 +98,10 @@ flowchart TB
 | **Edge** | AWS ALB + WAF | TLS termination, DDoS protection, WAF rules |
 | **Gateway** | Kong API Gateway | Authentication, rate limiting, request validation |
 | **Application** | Spring Security | JWT validation, RBAC, audit logging |
-| **Service** | SPIFFE/SPIRE mTLS | Service-to-service encryption and authentication |
-| **Network** | Kubernetes NetworkPolicies | Zero Trust network segmentation |
+| **Service** | Istio Service Mesh (mTLS) | Service-to-service encryption and authentication |
+| **Network** | Istio AuthorizationPolicies | Zero Trust service access control |
 | **Data** | PostgreSQL RLS | Tenant isolation at database level |
-| **Secrets** | External Secrets Operator | Secure credential management |
+| **Secrets** | Kubernetes Secrets (ESO in production) | Secure credential management |
 
 ---
 
@@ -265,146 +265,83 @@ public class PaymentController {
 
 ### Mutual TLS (mTLS)
 
-All service-to-service communication uses mTLS with SPIFFE/SPIRE for identity management.
+All service-to-service communication uses mTLS via **Istio Service Mesh**. Istio's Envoy sidecars automatically handle certificate management, rotation, and mTLS enforcement.
 
-> **📘 For comprehensive SPIFFE/SPIRE documentation**, including deployment guides, principal guidelines, and operational considerations, see the [SPIFFE/SPIRE Implementation Guide](SPIFFE_SPIRE_GUIDE.md).
+> **📘 For comprehensive Istio configuration**, see the Kubernetes manifests in `k8s/base/istio/`.
 
-#### SPIFFE Identity Format
+#### Istio Service Identity
+
+Istio uses SPIFFE-compatible identities derived from Kubernetes service accounts:
 
 ```
-spiffe://paylink.com/ns/payment-saga/sa/orchestrator
-spiffe://paylink.com/ns/payment-saga/sa/order-service
-spiffe://paylink.com/ns/payment-saga/sa/inventory-service
-spiffe://paylink.com/ns/payment-saga/sa/payment-gateway
+spiffe://cluster.local/ns/payment-saga/sa/orchestrator
+spiffe://cluster.local/ns/payment-saga/sa/order-service
+spiffe://cluster.local/ns/payment-saga/sa/inventory-service
+spiffe://cluster.local/ns/payment-saga/sa/payment-gateway
 ```
 
 #### Configuration
 
+mTLS is enforced via Istio PeerAuthentication (STRICT mode):
+
+```yaml
+# k8s/base/istio/peer-authentication.yaml
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: payment-saga
+spec:
+  mtls:
+    mode: STRICT
+```
+
+For local development without Istio, optional mTLS can be configured:
+
 ```java
 @Configuration
+@Profile("!k8s & !istio")  // Only active without Istio
 public class MtlsConfiguration {
-
-    @Value("${spiffe.socket.path:/run/spire/sockets/agent.sock}")
-    private String spiffeSocketPath;
-
-    @Bean
-    public X509Source x509Source() throws Exception {
-        return DefaultX509Source.newSource(
-            DefaultX509Source.X509SourceOptions.builder()
-                .spiffeSocketPath(spiffeSocketPath)
-                .build()
-        );
-    }
-
-    @Bean
-    public SslContext sslContext(X509Source x509Source) throws Exception {
-        return SslContextBuilder.forClient()
-            .keyManager(new SpiffeKeyManager(x509Source))
-            .trustManager(new SpiffeTrustManager(x509Source))
-            .protocols("TLSv1.3")
-            .build();
-    }
-
-    @Bean
-    public WebClient.Builder mtlsWebClientBuilder(SslContext sslContext) {
-        HttpClient httpClient = HttpClient.create()
-            .secure(t -> t.sslContext(sslContext));
-
-        return WebClient.builder()
-            .clientConnector(new ReactorClientHttpConnector(httpClient));
-    }
+    // Optional certificate-based mTLS for Feign clients
+    // In production, Istio handles mTLS at the sidecar level
 }
 ```
 
-### Zero Trust Network Policies
+### Zero Trust Service Access Control
 
-Kubernetes NetworkPolicies enforce least-privilege communication:
+Istio AuthorizationPolicies enforce least-privilege communication. This provides the same security as Kubernetes NetworkPolicies but with richer L7 controls.
 
 ```yaml
-# k8s/base/network-policies/orchestrator-policy.yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
+# k8s/base/istio/authorization-policies.yaml
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
 metadata:
-  name: orchestrator-network-policy
+  name: orchestrator-access
   namespace: payment-saga
 spec:
-  podSelector:
+  selector:
     matchLabels:
       app: payment-saga-orchestrator
-  policyTypes:
-    - Ingress
-    - Egress
-
-  # Only accept traffic from Kong Gateway
-  ingress:
+  rules:
+    # Allow Kong Gateway
     - from:
-        - namespaceSelector:
-            matchLabels:
-              name: kong
-          podSelector:
-            matchLabels:
-              app: kong-gateway
-      ports:
-        - protocol: TCP
-          port: 9090
-
-  # Only allow outbound to specific services
-  egress:
-    # Microservices
+        - source:
+            principals: ["cluster.local/ns/kong/sa/kong-gateway"]
+    # Allow health checks
     - to:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/component: microservice
-      ports:
-        - protocol: TCP
-          port: 8080
-
-    # Temporal
-    - to:
-        - podSelector:
-            matchLabels:
-              app: temporal
-      ports:
-        - protocol: TCP
-          port: 7233
-
-    # Kafka
-    - to:
-        - podSelector:
-            matchLabels:
-              app: kafka
-      ports:
-        - protocol: TCP
-          port: 9092
-
-    # PostgreSQL
-    - to:
-        - podSelector:
-            matchLabels:
-              app: postgresql
-      ports:
-        - protocol: TCP
-          port: 5432
-
-    # Redis
-    - to:
-        - podSelector:
-            matchLabels:
-              app: redis
-      ports:
-        - protocol: TCP
-          port: 6379
-
-    # DNS resolution
-    - to:
-        - namespaceSelector: {}
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - protocol: UDP
-          port: 53
+        - operation:
+            paths: ["/actuator/health/*"]
 ```
+
+**Service Access Matrix** (enforced by Istio AuthorizationPolicies):
+
+| FROM \ TO | Order | Inventory | Payment | Temporal | Kafka |
+|-----------|-------|-----------|---------|----------|-------|
+| Kong Gateway | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Orchestrator | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Order Service | - | ❌ | ❌ | ❌ | ✅ |
+| Inventory Service | ❌ | - | ❌ | ❌ | ✅ |
+| Payment Gateway | ❌ | ❌ | - | ❌ | ✅ |
 
 ### Tenant Context Propagation
 
@@ -470,12 +407,12 @@ public class TenantContextFilter extends OncePerRequestFilter {
 
 All payment provider webhooks must be verified using provider-specific signatures:
 
-| Provider | Algorithm | Header | Status |
-|----------|-----------|--------|--------|
-| Stripe | HMAC-SHA256 | `Stripe-Signature` | Implemented |
-| PayPal | RSA-SHA256 | `PayPal-Transmission-Sig` | Implemented |
-| Adyen | HMAC-SHA256 | `X-Adyen-Hmac-256` | Implemented |
-| Square | HMAC-SHA256 | `X-Square-Signature` | Implemented |
+| Provider | Algorithm | Header | Key Features |
+|----------|-----------|--------|--------------|
+| Stripe | HMAC-SHA256 | `Stripe-Signature` | Timestamp validation (5-min), constant-time comparison |
+| PayPal | RSA-SHA256 | `PayPal-Transmission-Sig` | Certificate-based verification, cert URL validation, caching |
+| Adyen | HMAC-SHA256 | `X-Adyen-Hmac-256` | Constant-time comparison |
+| Square | HMAC-SHA256 | `X-Square-Signature` | Constant-time comparison |
 
 #### Stripe Webhook Verification
 
@@ -507,51 +444,56 @@ public class StripeWebhookProcessor implements WebhookProcessor {
 
 #### PayPal Webhook Verification
 
+PayPal uses RSA-SHA256 certificate-based verification. The implementation fetches and caches PayPal's public certificate for signature verification:
+
 ```java
 @Component
-public class PayPalWebhookProcessor implements WebhookProcessor {
+public class PayPalSignatureVerifier implements WebhookSignatureVerifier {
 
-    private final PayPalApiClient paypalClient;
-
-    @Value("${webhook.paypal.webhook-id}")
-    private String webhookId;
+    private static final String SIGNATURE_ALGORITHM = "SHA256withRSA";
+    private static final long TOLERANCE_SECONDS = 300; // 5 minutes
+    private static final Duration CERTIFICATE_CACHE_TTL = Duration.ofHours(24);
 
     @Override
-    public boolean verifySignature(String payload, Map<String, String> headers) {
+    public boolean verify(String rawBody, Map<String, String> headers) {
+        // 1. Extract required headers
         String transmissionId = headers.get("paypal-transmission-id");
         String transmissionTime = headers.get("paypal-transmission-time");
-        String certUrl = headers.get("paypal-cert-url");
-        String authAlgo = headers.get("paypal-auth-algo");
         String transmissionSig = headers.get("paypal-transmission-sig");
+        String certUrl = headers.get("paypal-cert-url");
 
-        // Validate cert URL is from PayPal
-        if (!isValidPayPalCertUrl(certUrl)) {
-            log.warn("Invalid PayPal certificate URL: {}", certUrl);
+        // 2. Validate timestamp (prevent replay attacks)
+        if (!validateTimestamp(transmissionTime)) {
             return false;
         }
 
-        // Call PayPal's verification API
-        VerifyWebhookSignatureRequest request = VerifyWebhookSignatureRequest.builder()
-            .transmissionId(transmissionId)
-            .transmissionTime(transmissionTime)
-            .certUrl(certUrl)
-            .authAlgo(authAlgo)
-            .transmissionSig(transmissionSig)
-            .webhookId(webhookId)
-            .webhookEvent(payload)
-            .build();
+        // 3. Validate cert URL is from PayPal domain
+        if (!isValidPayPalCertUrl(certUrl)) {
+            return false;
+        }
 
-        VerifyWebhookSignatureResponse response =
-            paypalClient.verifyWebhookSignature(request);
+        // 4. Fetch and cache PayPal's certificate
+        X509Certificate certificate = getCertificate(certUrl);
+        certificate.checkValidity();
 
-        return "SUCCESS".equals(response.getVerificationStatus());
+        // 5. Construct expected message: transmissionId|transmissionTime|webhookId|crc32(body)
+        CRC32 crc = new CRC32();
+        crc.update(rawBody.getBytes(StandardCharsets.UTF_8));
+        String expectedMessage = String.format("%s|%s|%s|%d",
+                transmissionId, transmissionTime, webhookId, crc.getValue());
+
+        // 6. Verify RSA-SHA256 signature
+        Signature signature = Signature.getInstance(SIGNATURE_ALGORITHM);
+        signature.initVerify(certificate.getPublicKey());
+        signature.update(expectedMessage.getBytes(StandardCharsets.UTF_8));
+        return signature.verify(Base64.getDecoder().decode(transmissionSig));
     }
 
     private boolean isValidPayPalCertUrl(String certUrl) {
-        return certUrl != null && (
-            certUrl.startsWith("https://api.paypal.com/") ||
-            certUrl.startsWith("https://api.sandbox.paypal.com/")
-        );
+        URI uri = URI.create(certUrl);
+        String host = uri.getHost();
+        return host != null && host.endsWith("api.paypal.com") &&
+               "https".equalsIgnoreCase(uri.getScheme());
     }
 }
 ```
@@ -717,41 +659,72 @@ Automatic credential rotation with zero downtime:
 
 ### PostgreSQL Row-Level Security (RLS)
 
-All tenant data is isolated at the database level:
+All tenant data is isolated at the database level. RLS policies are defined in `V10__row_level_security.sql`:
 
 ```sql
 -- Enable RLS on payment tables
 ALTER TABLE payment_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payment_requests FORCE ROW LEVEL SECURITY;
 
--- Tenant isolation policy
+-- Tenant isolation policy (uses PostgreSQL session variable)
 CREATE POLICY tenant_isolation_policy ON payment_requests
-    USING (tenant_id = current_setting('app.current_tenant')::text);
+    USING (tenant_id = current_setting('app.current_tenant', true))
+    WITH CHECK (tenant_id = current_setting('app.current_tenant', true));
 
--- Admin bypass policy
-CREATE POLICY admin_bypass_policy ON payment_requests
-    USING (current_setting('app.is_admin')::boolean = true);
+-- Bypass policy for system operations
+CREATE POLICY bypass_rls_policy ON payment_requests
+    USING (current_setting('app.bypass_rls', true) = 'true');
 
--- Create index for performance
-CREATE INDEX idx_payment_requests_tenant ON payment_requests(tenant_id);
+-- Helper function for setting tenant context
+CREATE FUNCTION set_tenant_context(p_tenant_id VARCHAR) RETURNS VOID AS $$
+BEGIN
+    PERFORM set_config('app.current_tenant', p_tenant_id, false);
+END;
+$$ LANGUAGE plpgsql;
 ```
 
-### Tenant-Aware Repository
+### Tenant Context Integration
+
+The tenant context is automatically set at the start of each transaction via `TenantAwareTransactionAspect`:
 
 ```java
+@Aspect
 @Component
-public class TenantAwareEntityListener {
+@Order(Ordered.HIGHEST_PRECEDENCE + 1)
+public class TenantAwareTransactionAspect {
 
-    @PrePersist
-    @PreUpdate
-    public void setTenantId(TenantAware entity) {
+    @Around("@annotation(org.springframework.transaction.annotation.Transactional)")
+    public Object setTenantContext(ProceedingJoinPoint joinPoint) throws Throwable {
         String tenantId = TenantContext.getCurrentTenant();
-        if (tenantId == null) {
-            throw new SecurityException("Tenant context not set");
+
+        if (tenantId != null && !tenantId.isBlank()) {
+            // Set PostgreSQL session variable for RLS
+            jdbcTemplate.execute("SELECT set_config('app.current_tenant', '" +
+                    escapeSqlString(tenantId) + "', false)");
+        } else if (TenantContext.isBypassRls()) {
+            // Enable RLS bypass for system operations
+            jdbcTemplate.execute("SELECT set_config('app.bypass_rls', 'true', false)");
         }
-        entity.setTenantId(tenantId);
+
+        return joinPoint.proceed();
     }
 }
+```
+
+### TenantContext API
+
+```java
+// Set tenant (from TenantContextFilter after JWT validation)
+TenantContext.setCurrentTenant("tenant-abc");
+
+// Get current tenant
+String tenantId = TenantContext.getCurrentTenant();
+
+// Bypass RLS for system operations (use with caution!)
+TenantContext.setBypassRls(true);
+
+// Clear context (always in finally block)
+TenantContext.clear();
 ```
 
 ---

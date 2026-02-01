@@ -644,6 +644,14 @@ flowchart TB
 - `MdcTaskDecorator` - Preserves MDC context in async thread pools
 - `CorrelationIdContextPropagator` - Propagates context across Temporal boundaries
 
+**Note on Istio Integration:**
+
+When running with Istio service mesh:
+- B3 trace propagation is handled automatically by Envoy sidecars
+- Application code focuses on business correlation IDs (`X-Correlation-ID`)
+- Both work together: B3 for distributed tracing (Zipkin/Jaeger), correlation ID for business context
+- `FeignCorrelationIdInterceptor` propagates B3 headers for mesh-aware tracing
+
 ### Principle 8: Structured Logging Pattern
 
 All services use a unified log format for consistent parsing and aggregation:
@@ -929,13 +937,13 @@ Authentication is enforced at multiple layers to prevent single points of failur
 ```mermaid
 flowchart TB
     subgraph Layer1["Layer 1: API Gateway (Kong)"]
-        L1A["OAuth 2.0 Token Introspection"]
+        L1A["JWT Validation / OAuth 2.0 Token Introspection"]
         L1B["Rate Limiting (per-tenant)"]
         L1C["Bot Protection"]
     end
 
     subgraph Layer2["Layer 2: Application (Spring Security)"]
-        L2A["JWT Validation"]
+        L2A["JWT Validation (backup)"]
         L2B["Permission-Based Authorization (@PreAuthorize)"]
         L2C["Tenant Context Extraction"]
     end
@@ -948,24 +956,29 @@ flowchart TB
     Layer1 --> Layer2 --> Layer3
 ```
 
+**Kong Authentication Methods:**
+
+- **JWT Validation** (default): Stateless validation of self-contained JWTs
+- **OAuth 2.0 Token Introspection**: Active validation of opaque tokens with authorization server
+
 **Implementation in this codebase:**
 
-- Kong OAuth 2.0 plugin validates tokens at the edge
+- Kong JWT/OAuth 2.0 plugin validates tokens at the edge
 - Spring Security Resource Server validates JWT and extracts permissions
 - `@PreAuthorize` annotations enforce fine-grained access control
 - PostgreSQL RLS policies enforce tenant isolation at the database level
 
 ### Principle 13: Zero Trust Service Communication
 
-All internal service-to-service communication uses mTLS with SPIFFE/SPIRE identities:
+All internal service-to-service communication is encrypted and authenticated via mTLS:
 
 ```mermaid
 flowchart LR
-    subgraph SPIRE["SPIFFE/SPIRE Identity"]
-        S1["spiffe://paylink.com/ns/payment-saga/sa/orchestrator"]
-        S2["spiffe://paylink.com/ns/payment-saga/sa/order-service"]
-        S3["spiffe://paylink.com/ns/payment-saga/sa/inventory-service"]
-        S4["spiffe://paylink.com/ns/payment-saga/sa/payment-gateway"]
+    subgraph Mesh["Istio Service Mesh (mTLS)"]
+        S1["orchestrator (Envoy sidecar)"]
+        S2["order-service (Envoy sidecar)"]
+        S3["inventory-service (Envoy sidecar)"]
+        S4["payment-gateway (Envoy sidecar)"]
     end
 
     O["Orchestrator"] <-->|mTLS| OS["Order Service"]
@@ -978,13 +991,21 @@ flowchart LR
 - Never trust, always verify - every request is authenticated
 - Kubernetes NetworkPolicies enforce least-privilege communication
 - No plaintext traffic within the cluster
-- Automatic certificate rotation via SPIRE
+- Automatic certificate rotation via Istio's istiod (Citadel)
 
-**Implementation in this codebase:**
+**Kubernetes Deployment (Istio):**
 
-- `MtlsConfiguration` - Configures SPIFFE-based mTLS for Feign clients
-- `k8s/base/network-policies/` - NetworkPolicies for each service
-- `k8s/base/spire/` - SPIRE server and agent deployment
+Istio service mesh provides automatic mTLS via Envoy sidecars. Certificates are managed and rotated automatically by istiod. See [Principle 21](#principle-21-layered-gateway-architecture) for Istio configuration details.
+
+- `k8s/base/istio/peer-authentication.yaml` - mTLS STRICT mode
+- `k8s/base/istio/authorization-policies.yaml` - Service-to-service access control
+- `k8s/base/network-policies/` - NetworkPolicies for defense-in-depth
+
+**Local Development (Non-Istio):**
+
+For local profiles without Istio, optional certificate-based authentication can be configured:
+
+- `MtlsConfiguration` - Configures certificate-based mTLS for Feign clients (optional)
 
 ### Principle 14: Webhook Security
 
@@ -1305,7 +1326,7 @@ These principles have been validated through:
 | Unified Error Handling       | `PaymentErrorCode`, `GlobalExceptionHandler`, `ErrorCodeMappingService`   | `GlobalExceptionHandlerTest`                       |
 | Horizontal Scaling           | `ShardingConfiguration`, `ShardedWorkerFactory`, `PaymentRouter` sharding | `PaymentRouterTest` sharding tests                 |
 | Defense-in-Depth Auth        | Kong + Spring Security + RLS                                              | Security integration tests                         |
-| Zero Trust mTLS              | SPIFFE/SPIRE, NetworkPolicies                                             | Infrastructure tests                               |
+| Zero Trust mTLS              | Istio mTLS (STRICT), NetworkPolicies                                      | Infrastructure tests                               |
 | Webhook Security             | Signature verification, IP allowlisting                                   | `WebhookProcessor*Test`                            |
 | Secrets Management           | External Secrets Operator                                                 | Deployment validation                              |
 | Multi-Tenant Isolation       | PostgreSQL RLS, TenantContext                                             | `TenantIsolationTest`                              |
