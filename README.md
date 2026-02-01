@@ -113,6 +113,7 @@ flowchart TB
 ```
 
 **Temporal Features:**
+
 - Automatic retries with exponential backoff
 - Durable execution (survives crashes)
 - Compensation stack for rollback (LIFO)
@@ -165,6 +166,7 @@ stateDiagram-v2
 ```
 
 **State Machine Features:**
+
 - Guards for transition validation
 - Actions on state entry/exit
 - Event publishing on transitions
@@ -207,6 +209,7 @@ flowchart LR
 ```
 
 **Kafka Guarantees:**
+
 - At-least-once delivery
 - Ordering per partition (by orderId)
 - Idempotency via event IDs
@@ -235,18 +238,18 @@ flowchart TB
 
 **Technical Comparison:**
 
-| Capability | Temporal | Kafka |
-|------------|----------|-------|
-| Workflow Orchestration | ✅ Core use | ❌ Not designed for |
-| State Management | ✅ Excellent | ❌ Not designed for |
-| Event Broadcasting | ⚠️ Limited | ✅ Core use |
-| Multiple Consumers | ❌ One workflow | ✅ Unlimited |
-| Retry Logic | ✅ Built-in | ⚠️ Manual |
-| Compensation (SAGA) | ✅ Built-in | ⚠️ Manual |
-| Exactly-Once Semantics | ✅ Guaranteed | ⚠️ At-least-once |
-| Event Replay | ⚠️ Workflow history | ✅ Event log |
-| Analytics/Streaming | ❌ Not for this | ✅ Designed for |
-| Throughput | ~10K TPS | ~1M+ TPS |
+| Capability             | Temporal            | Kafka               |
+| ---------------------- | ------------------- | ------------------- |
+| Workflow Orchestration | ✅ Core use         | ❌ Not designed for |
+| State Management       | ✅ Excellent        | ❌ Not designed for |
+| Event Broadcasting     | ⚠️ Limited          | ✅ Core use         |
+| Multiple Consumers     | ❌ One workflow     | ✅ Unlimited        |
+| Retry Logic            | ✅ Built-in         | ⚠️ Manual           |
+| Compensation (SAGA)    | ✅ Built-in         | ⚠️ Manual           |
+| Exactly-Once Semantics | ✅ Guaranteed       | ⚠️ At-least-once    |
+| Event Replay           | ⚠️ Workflow history | ✅ Event log        |
+| Analytics/Streaming    | ❌ Not for this     | ✅ Designed for     |
+| Throughput             | ~10K TPS            | ~1M+ TPS            |
 
 **How They Work Together:**
 
@@ -279,14 +282,14 @@ flowchart LR
 
 **Key Benefits of Using Both:**
 
-| Temporal Handles | Kafka Handles |
-|-----------------|---------------|
-| Sequential step execution | Broadcasting state changes |
-| "Authorize then Capture" ordering | Notifying Email, Analytics, Warehouse |
-| Retry on payment gateway timeout | Decoupled consumer processing |
-| Compensate on failure (refund) | Event replay for debugging |
-| Track workflow progress | Add new consumers without code changes |
-| Exactly-once payment processing | Audit trail of all events |
+| Temporal Handles                  | Kafka Handles                          |
+| --------------------------------- | -------------------------------------- |
+| Sequential step execution         | Broadcasting state changes             |
+| "Authorize then Capture" ordering | Notifying Email, Analytics, Warehouse  |
+| Retry on payment gateway timeout  | Decoupled consumer processing          |
+| Compensate on failure (refund)    | Event replay for debugging             |
+| Track workflow progress           | Add new consumers without code changes |
+| Exactly-once payment processing   | Audit trail of all events              |
 
 > **Key Insight**: Temporal orchestrates the payment workflow (the "how"), Kafka broadcasts what happened (the "what") to everyone who cares.
 
@@ -530,6 +533,7 @@ sequenceDiagram
 ```
 
 **Guarantees:**
+
 - No dual-write problem (event ↔ business data consistency)
 - At-least-once delivery
 - Ordering preserved per partition key
@@ -563,6 +567,7 @@ flowchart LR
 ```
 
 **Benefits:**
+
 - Temporal workflow doesn't know about downstream systems
 - New consumers can be added without changing workflow
 - Provides natural audit trail
@@ -626,11 +631,11 @@ flowchart TB
 
 **Three Pillars of Observability:**
 
-| Pillar | Technology | Purpose |
-|--------|------------|---------|
-| **Tracing** | Zipkin + Correlation IDs | End-to-end request tracking |
-| **Metrics** | Prometheus + Micrometer | Business and infrastructure health |
-| **Logging** | SLF4J + MDC | Structured logs with correlation context |
+| Pillar      | Technology               | Purpose                                  |
+| ----------- | ------------------------ | ---------------------------------------- |
+| **Tracing** | Zipkin + Correlation IDs | End-to-end request tracking              |
+| **Metrics** | Prometheus + Micrometer  | Business and infrastructure health       |
+| **Logging** | SLF4J + MDC              | Structured logs with correlation context |
 
 **Implementation in this codebase:**
 
@@ -658,22 +663,24 @@ flowchart LR
 ```
 
 **Log Pattern:**
+
 ```
 %d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [svc=%X{service:-}] [cid=%X{correlationId:-}] [tid=%X{traceId:-}] %-5level %logger{36} - %msg%n
 ```
 
 **Standardized Prefixes by Layer:**
 
-| Layer | Prefix | Example |
-|-------|--------|---------|
-| Controller/API | `[API]` | `[API] Processing payment: orderId=ORD-123` |
-| Service | `[*-SVC]` | `[ORDER-SVC] Validating order` |
-| Activity | `[ACTIVITY-*]` | `[ACTIVITY-START] validateOrder` |
-| State Machine | `[SM-*]` | `[SM-TRANSITION] PENDING→AUTHORIZED` |
-| Consumer | `[*-CONSUMER]` | `[WEBHOOK-CONSUMER] Processing event` |
-| Fallback | `[FALLBACK-*]` | `[FALLBACK-ORDER] Service unavailable` |
+| Layer          | Prefix         | Example                                     |
+| -------------- | -------------- | ------------------------------------------- |
+| Controller/API | `[API]`        | `[API] Processing payment: orderId=ORD-123` |
+| Service        | `[*-SVC]`      | `[ORDER-SVC] Validating order`              |
+| Activity       | `[ACTIVITY-*]` | `[ACTIVITY-START] validateOrder`            |
+| State Machine  | `[SM-*]`       | `[SM-TRANSITION] PENDING→AUTHORIZED`        |
+| Consumer       | `[*-CONSUMER]` | `[WEBHOOK-CONSUMER] Processing event`       |
+| Fallback       | `[FALLBACK-*]` | `[FALLBACK-ORDER] Service unavailable`      |
 
 **Example Cross-Service Trace:**
+
 ```
 10:30:45.100 [svc=payment-saga-orchestrator] [cid=abc-123] INFO  - [API] Processing payment
 10:30:45.150 [svc=order-service]             [cid=abc-123] INFO  - [ORDER-SVC] Validating order
@@ -715,11 +722,13 @@ sequenceDiagram
 ```
 
 **Problem Solved:**
+
 - Without trace resumption, webhooks appear as disconnected traces
 - Logs cannot be linked back to original payment request
 - End-to-end latency metrics are incomplete
 
 **Storage Strategy:**
+
 ```
 Redis (Primary):
   correlation:order:{orderId} → {correlationId, traceId, parentSpanId}
@@ -767,14 +776,14 @@ flowchart TB
 
 **Error Code Format:** `{CATEGORY}-{CODE}`
 
-| Category | Prefix | HTTP Status | Retryable | Examples |
-|:---------|:-------|------------:|:---------:|:---------|
-| Validation | `VAL-1xxx` | 400 | No | `VAL-1001` Invalid request, `VAL-1004` Invalid amount |
-| Inventory | `INV-2xxx` | 409 | No | `INV-2001` Insufficient stock, `INV-2003` Reservation failed |
-| Payment | `PAY-3xxx` | 402 | No | `PAY-3001` Auth failed, `PAY-3004` Card declined |
-| System | `SYS-5xxx` | 500 | Yes | `SYS-5001` Internal error, `SYS-5008` Timeout |
-| SAGA/Workflow | `SAGA-6xxx` | 500 | Yes | `SAGA-6001` Workflow failed, `SAGA-6002` Compensation failed |
-| Resilience | `RES-7xxx` | 503 | Yes | `RES-7001` Circuit breaker open, `RES-7003` Rate limited |
+| Category      | Prefix      | HTTP Status | Retryable | Examples                                                     |
+| :------------ | :---------- | ----------: | :-------: | :----------------------------------------------------------- |
+| Validation    | `VAL-1xxx`  |         400 |    No     | `VAL-1001` Invalid request, `VAL-1004` Invalid amount        |
+| Inventory     | `INV-2xxx`  |         409 |    No     | `INV-2001` Insufficient stock, `INV-2003` Reservation failed |
+| Payment       | `PAY-3xxx`  |         402 |    No     | `PAY-3001` Auth failed, `PAY-3004` Card declined             |
+| System        | `SYS-5xxx`  |         500 |    Yes    | `SYS-5001` Internal error, `SYS-5008` Timeout                |
+| SAGA/Workflow | `SAGA-6xxx` |         500 |    Yes    | `SAGA-6001` Workflow failed, `SAGA-6002` Compensation failed |
+| Resilience    | `RES-7xxx`  |         503 |    Yes    | `RES-7001` Circuit breaker open, `RES-7003` Rate limited     |
 
 **Standard Error Response:**
 
@@ -822,12 +831,12 @@ flowchart LR
     External --> Mapping --> Internal
 ```
 
-| External (Stripe) | External (PayPal) | Internal Code | Message |
-|:------------------|:------------------|:--------------|:--------|
-| `card_declined` | `INSTRUMENT_DECLINED` | `PAY-3004` | Card declined |
-| `insufficient_funds` | `PAYER_CANNOT_PAY` | `PAY-3003` | Insufficient funds |
-| `expired_card` | `CREDIT_CARD_EXPIRED` | `PAY-3005` | Card expired |
-| `rate_limit` | `RATE_LIMIT_REACHED` | `RES-7003` | Rate limited |
+| External (Stripe)    | External (PayPal)     | Internal Code | Message            |
+| :------------------- | :-------------------- | :------------ | :----------------- |
+| `card_declined`      | `INSTRUMENT_DECLINED` | `PAY-3004`    | Card declined      |
+| `insufficient_funds` | `PAYER_CANNOT_PAY`    | `PAY-3003`    | Insufficient funds |
+| `expired_card`       | `CREDIT_CARD_EXPIRED` | `PAY-3005`    | Card expired       |
+| `rate_limit`         | `RATE_LIMIT_REACHED`  | `RES-7003`    | Rate limited       |
 
 **Implementation in this codebase:**
 
@@ -884,12 +893,12 @@ Example: customerId="CUST-12345", priority=NORMAL, shardCount=16
   → task_queue = "payment-saga-queue-normal-shard-11"
 ```
 
-| Priority | Shards | Target SLA | Use Cases |
-|:---------|-------:|:-----------|:----------|
-| CRITICAL | 4 | 5s | VIP customers, >$5,000 transactions |
-| HIGH | 8 | 10s | Subscriptions, >$1,000 transactions |
-| NORMAL | 16 | 30s | Standard payments (60-70% traffic) |
-| LOW | 8 | 60s | Batch payments, scheduled transactions |
+| Priority | Shards | Target SLA | Use Cases                              |
+| :------- | -----: | :--------- | :------------------------------------- |
+| CRITICAL |      4 | 5s         | VIP customers, >$5,000 transactions    |
+| HIGH     |      8 | 10s        | Subscriptions, >$1,000 transactions    |
+| NORMAL   |     16 | 30s        | Standard payments (60-70% traffic)     |
+| LOW      |      8 | 60s        | Batch payments, scheduled transactions |
 
 **Key Benefits:**
 
@@ -900,10 +909,10 @@ Example: customerId="CUST-12345", priority=NORMAL, shardCount=16
 
 **Throughput Scaling Path:**
 
-| Phase | Database | Target TPS | Use Case |
-|:------|:---------|:-----------|:---------|
-| 1-4 | PostgreSQL | 500-5K | Standard production |
-| 5 | Cassandra | 10K-100K+ | Bank-wide enterprise |
+| Phase | Database   | Target TPS | Use Case             |
+| :---- | :--------- | :--------- | :------------------- |
+| 1-4   | PostgreSQL | 500-5K     | Standard production  |
+| 5     | Cassandra  | 10K-100K+  | Bank-wide enterprise |
 
 **Implementation in this codebase:**
 
@@ -940,6 +949,7 @@ flowchart TB
 ```
 
 **Implementation in this codebase:**
+
 - Kong OAuth 2.0 plugin validates tokens at the edge
 - Spring Security Resource Server validates JWT and extracts permissions
 - `@PreAuthorize` annotations enforce fine-grained access control
@@ -964,12 +974,14 @@ flowchart LR
 ```
 
 **Key Principles:**
+
 - Never trust, always verify - every request is authenticated
 - Kubernetes NetworkPolicies enforce least-privilege communication
 - No plaintext traffic within the cluster
 - Automatic certificate rotation via SPIRE
 
 **Implementation in this codebase:**
+
 - `MtlsConfiguration` - Configures SPIFFE-based mTLS for Feign clients
 - `k8s/base/network-policies/` - NetworkPolicies for each service
 - `k8s/base/spire/` - SPIRE server and agent deployment
@@ -991,14 +1003,15 @@ flowchart TB
     end
 ```
 
-| Provider | Algorithm | Status |
-|----------|-----------|--------|
-| Stripe | HMAC-SHA256 | Implemented |
-| PayPal | RSA-SHA256 (API verification) | Implemented |
-| Adyen | HMAC-SHA256 | Implemented |
-| Square | HMAC-SHA256 | Implemented |
+| Provider | Algorithm                     | Status      |
+| -------- | ----------------------------- | ----------- |
+| Stripe   | HMAC-SHA256                   | Implemented |
+| PayPal   | RSA-SHA256 (API verification) | Implemented |
+| Adyen    | HMAC-SHA256                   | Implemented |
+| Square   | HMAC-SHA256                   | Implemented |
 
 **Implementation in this codebase:**
+
 - `WebhookSecurityFilter` - IP allowlisting
 - `StripeWebhookProcessor`, `PayPalWebhookProcessor`, etc. - Signature verification
 - `WebhookIdempotencyService` - Deduplication
@@ -1028,12 +1041,14 @@ flowchart LR
 ```
 
 **Key Features:**
+
 - Automatic rotation with zero downtime
 - Audit trail of secret access
 - Encryption at rest and in transit
 - RBAC for secret access
 
 **Implementation in this codebase:**
+
 - `k8s/base/external-secrets/` - ExternalSecret manifests
 - Application properties reference secrets via environment variables
 
@@ -1058,11 +1073,13 @@ flowchart TB
 ```
 
 **Guarantees:**
+
 - Tenants cannot access each other's data even with SQL injection
 - All queries automatically filtered by tenant
 - Admin bypass available for cross-tenant operations
 
 **Implementation in this codebase:**
+
 - `TenantContextFilter` - Extracts and sets tenant context
 - `TenantAwareEntityListener` - Automatically sets tenant_id on persist
 - `V10__add_rls_policies.sql` - Database migration for RLS policies
@@ -1092,12 +1109,14 @@ flowchart TB
 ```
 
 **Consent Requirements (SBV Circular 64):**
+
 - Granular permissions (accounts, balances, transactions, payments)
 - Time-bound access (maximum 90 days)
 - Customer-revocable at any time
 - Strong Customer Authentication (SCA) for authorization
 
 **Implementation in this codebase:**
+
 - `ConsentEntity` / `ConsentRepository` - Consent persistence with expiry
 - `ConsentService` - Consent lifecycle management
 - `ConsentController` - Open Banking consent APIs
@@ -1128,12 +1147,14 @@ flowchart TB
 ```
 
 **TPP Verification (SBV Circular 64):**
+
 - SBV license number validation
 - mTLS client certificate authentication
 - API tier restrictions (Tier 1/2/3)
 - Rate limiting per TPP license
 
 **Implementation in this codebase:**
+
 - `ThirdPartyProviderEntity` / `TppRepository` - TPP persistence
 - `TppRegistrationService` - TPP onboarding and credential management
 - `TppController` - TPP management APIs
@@ -1166,12 +1187,14 @@ flowchart TB
 ```
 
 **Audit Requirements (SBV Circular 64):**
+
 - All API access logged to immutable table
 - 7-year retention period
 - No UPDATE/DELETE on audit records
 - SBV reporting capability
 
 **Implementation in this codebase:**
+
 - `DataAccessAuditEntity` - Audit record persistence
 - `DataAccessAuditService` - Audit logging service
 - `DataAccessAuditFilter` - Automatic request/response logging
@@ -1202,44 +1225,95 @@ flowchart TB
 
 **API Tier Classification:**
 
-| Tier | Category | Consent Required | SCA Required |
-|:-----|:---------|:-----------------|:-------------|
-| Tier 1 | Information Query | No | No |
-| Tier 2 | Account Information Services (AIS) | Yes | No |
-| Tier 3 | Payment Initiation Services (PIS) | Yes | Yes |
+| Tier   | Category                           | Consent Required | SCA Required |
+| :----- | :--------------------------------- | :--------------- | :----------- |
+| Tier 1 | Information Query                  | No               | No           |
+| Tier 2 | Account Information Services (AIS) | Yes              | No           |
+| Tier 3 | Payment Initiation Services (PIS)  | Yes              | Yes          |
 
 **Implementation in this codebase:**
+
 - `AccountInfoController` - Tier 1 APIs
 - `TransactionController` - Tier 2 APIs
 - `PaymentInitiationController` - Tier 3 APIs
 - `OpenBankingSecurityConfig` - Tier-based access control
 
+### Principle 21: Layered Gateway Architecture
+
+External and internal traffic are handled by separate security layers with distinct responsibilities:
+
+```mermaid
+flowchart TB
+    subgraph External["EXTERNAL LAYER (Kong Gateway)"]
+        E1["Authentication (JWT/API Key)"]
+        E2["Rate Limiting (100/min payments, 1000/min global)"]
+        E3["Security Headers (HSTS, X-Frame-Options, CSP)"]
+        E4["Correlation ID Injection"]
+        E5["Request Size Limiting (10MB)"]
+    end
+
+    subgraph Internal["INTERNAL LAYER (Istio Service Mesh)"]
+        I1["mTLS Encryption (STRICT mode)"]
+        I2["Authorization Policies (service-to-service ACLs)"]
+        I3["Circuit Breaking & Retries"]
+        I4["B3 Distributed Tracing"]
+        I5["Load Balancing with Health Checks"]
+    end
+
+    External --> Internal
+```
+
+**Service Access Matrix (Istio AuthorizationPolicy):**
+
+| FROM \ TO        | Order | Inventory | Payment | Open Banking |
+| ---------------- | ----- | --------- | ------- | ------------ |
+| Kong (External)  | ✅    | ✅        | ✅      | ✅           |
+| Orchestrator     | ✅    | ✅        | ✅      | ❌           |
+| Open Banking API | ✅    | ❌        | ✅      | -            |
+| Domain Services  | ❌    | ❌        | ❌      | ❌           |
+
+**Key Design Decisions:**
+
+- **Kong at edge**: Handles authentication before traffic enters the mesh
+- **Istio internally**: Zero-trust with mTLS between all services
+- **No direct cross-domain calls**: Order cannot call Inventory directly (prevents tight coupling)
+- **Orchestrator as hub**: Only the orchestrator coordinates saga steps
+
+**Implementation in this codebase:**
+
+- `k8s/base/kong/` - Kong ingress routes and plugins
+- `k8s/base/istio/peer-authentication.yaml` - mTLS STRICT mode
+- `k8s/base/istio/authorization-policies.yaml` - Service access control
+- `k8s/base/istio/destination-rules.yaml` - Traffic policies
+- [API_GATEWAY_ARCHITECTURE.md](docs/API_GATEWAY_ARCHITECTURE.md) - Detailed architecture documentation
+
 ### Architecture Validation
 
 These principles have been validated through:
 
-| Principle | Implementation | Tests |
-|:----------|:---------------|:------|
-| Minimal Workflow State | `PaymentSagaWorkflowImpl` stores only IDs | `PaymentSagaWorkflowTest` |
-| Single Responsibility | Temporal + State Machine separation | `PaymentStateMachineTest` |
-| Idempotency | `IdempotencyService`, `WebhookIdempotencyService` | `*IdempotencyTest` |
-| Transactional Outbox | `OutboxPoller`, `WebhookKafkaOutboxPoller` | `OutboxPollerTest`, `WebhookKafkaOutboxPollerTest` |
-| Event-Driven | Kafka topics for all domain events | `WebhookEventConsumerTest` |
-| Compensation Stack | LIFO rollback in `PaymentSagaWorkflowImpl` | `PaymentSagaWorkflowAdvancedTest` |
-| End-to-End Observability | `CorrelationIdFilter`, `MdcTaskDecorator`, Propagators | `CorrelationIdFilterTest` |
-| Structured Logging | `LoggingConstants`, unified log pattern, MDC keys | Service integration tests |
-| Trace Resumption | `CorrelationRegistry`, `TraceContextRestorer` | `WebhookEventConsumerTest` |
-| Unified Error Handling | `PaymentErrorCode`, `GlobalExceptionHandler`, `ErrorCodeMappingService` | `GlobalExceptionHandlerTest` |
-| Horizontal Scaling | `ShardingConfiguration`, `ShardedWorkerFactory`, `PaymentRouter` sharding | `PaymentRouterTest` sharding tests |
-| Defense-in-Depth Auth | Kong + Spring Security + RLS | Security integration tests |
-| Zero Trust mTLS | SPIFFE/SPIRE, NetworkPolicies | Infrastructure tests |
-| Webhook Security | Signature verification, IP allowlisting | `WebhookProcessor*Test` |
-| Secrets Management | External Secrets Operator | Deployment validation |
-| Multi-Tenant Isolation | PostgreSQL RLS, TenantContext | `TenantIsolationTest` |
-| Customer Consent Management | `ConsentEntity`, `ConsentService`, `ConsentValidationFilter` | `ConsentServiceTest` |
-| TPP Registration | `ThirdPartyProviderEntity`, `TppRegistrationService`, Kong mTLS | `TppRegistrationServiceTest` |
-| Data Access Audit | `DataAccessAuditEntity`, `DataAccessAuditFilter`, immutable table | `DataAccessAuditServiceTest` |
-| API Tiering | Tier 1/2/3 controllers, `OpenBankingSecurityConfig` | Open Banking API tests |
+| Principle                    | Implementation                                                            | Tests                                              |
+| :--------------------------- | :------------------------------------------------------------------------ | :------------------------------------------------- |
+| Minimal Workflow State       | `PaymentSagaWorkflowImpl` stores only IDs                                 | `PaymentSagaWorkflowTest`                          |
+| Single Responsibility        | Temporal + State Machine separation                                       | `PaymentStateMachineTest`                          |
+| Idempotency                  | `IdempotencyService`, `WebhookIdempotencyService`                         | `*IdempotencyTest`                                 |
+| Transactional Outbox         | `OutboxPoller`, `WebhookKafkaOutboxPoller`                                | `OutboxPollerTest`, `WebhookKafkaOutboxPollerTest` |
+| Event-Driven                 | Kafka topics for all domain events                                        | `WebhookEventConsumerTest`                         |
+| Compensation Stack           | LIFO rollback in `PaymentSagaWorkflowImpl`                                | `PaymentSagaWorkflowAdvancedTest`                  |
+| End-to-End Observability     | `CorrelationIdFilter`, `MdcTaskDecorator`, Propagators                    | `CorrelationIdFilterTest`                          |
+| Structured Logging           | `LoggingConstants`, unified log pattern, MDC keys                         | Service integration tests                          |
+| Trace Resumption             | `CorrelationRegistry`, `TraceContextRestorer`                             | `WebhookEventConsumerTest`                         |
+| Unified Error Handling       | `PaymentErrorCode`, `GlobalExceptionHandler`, `ErrorCodeMappingService`   | `GlobalExceptionHandlerTest`                       |
+| Horizontal Scaling           | `ShardingConfiguration`, `ShardedWorkerFactory`, `PaymentRouter` sharding | `PaymentRouterTest` sharding tests                 |
+| Defense-in-Depth Auth        | Kong + Spring Security + RLS                                              | Security integration tests                         |
+| Zero Trust mTLS              | SPIFFE/SPIRE, NetworkPolicies                                             | Infrastructure tests                               |
+| Webhook Security             | Signature verification, IP allowlisting                                   | `WebhookProcessor*Test`                            |
+| Secrets Management           | External Secrets Operator                                                 | Deployment validation                              |
+| Multi-Tenant Isolation       | PostgreSQL RLS, TenantContext                                             | `TenantIsolationTest`                              |
+| Customer Consent Management  | `ConsentEntity`, `ConsentService`, `ConsentValidationFilter`              | `ConsentServiceTest`                               |
+| TPP Registration             | `ThirdPartyProviderEntity`, `TppRegistrationService`, Kong mTLS           | `TppRegistrationServiceTest`                       |
+| Data Access Audit            | `DataAccessAuditEntity`, `DataAccessAuditFilter`, immutable table         | `DataAccessAuditServiceTest`                       |
+| API Tiering                  | Tier 1/2/3 controllers, `OpenBankingSecurityConfig`                       | Open Banking API tests                             |
+| Layered Gateway Architecture | Kong (edge) + Istio (mesh), `authorization-policies.yaml`                 | Infrastructure tests                               |
 
 ## Module Structure
 
@@ -1287,15 +1361,15 @@ flowchart TB
 
 ### Communication Patterns
 
-| Pattern               | Technology                     | Use Case                                           |
-| --------------------- | ------------------------------ | -------------------------------------------------- |
-| **Synchronous**       | Spring Cloud OpenFeign         | SAGA step execution (validate, reserve, authorize) |
-| **Service Discovery** | Kubernetes DNS + Spring Cloud  | Service resolution via K8s DNS (EKS/K8s profiles)  |
-| **API Gateway**       | Kong Gateway                   | Ingress routing, rate limiting, authentication     |
-| **Async Events**      | Kafka + Outbox                 | Domain event publishing (payment captured, etc.)   |
-| **Webhook Ingestion** | Kafka                          | External payment gateway confirmations             |
-| **Caching**           | Redis                          | Idempotency keys, session data                     |
-| **Tracing**           | Zipkin + Brave                 | Distributed request tracing                        |
+| Pattern               | Technology                    | Use Case                                           |
+| --------------------- | ----------------------------- | -------------------------------------------------- |
+| **Synchronous**       | Spring Cloud OpenFeign        | SAGA step execution (validate, reserve, authorize) |
+| **Service Discovery** | Kubernetes DNS + Spring Cloud | Service resolution via K8s DNS (EKS/K8s profiles)  |
+| **API Gateway**       | Kong Gateway                  | Ingress routing, rate limiting, authentication     |
+| **Async Events**      | Kafka + Outbox                | Domain event publishing (payment captured, etc.)   |
+| **Webhook Ingestion** | Kafka                         | External payment gateway confirmations             |
+| **Caching**           | Redis                         | Idempotency keys, session data                     |
+| **Tracing**           | Zipkin + Brave                | Distributed request tracing                        |
 
 ### Database-per-Service
 
@@ -1324,6 +1398,7 @@ flowchart TB
 ```
 
 **Benefits:**
+
 - Independent scaling per service
 - Technology flexibility (could use different DBs)
 - Failure isolation
@@ -1419,33 +1494,33 @@ curl http://localhost:9090/actuator/prometheus | grep resilience4j
 
 Standardized error codes and responses across the platform:
 
-| Category | Code | Description | HTTP | Retryable |
-|----------|------|-------------|------|-----------|
-| **VAL-1xxx** | | **Validation Errors** | **400** | **No** |
-| | VAL-1001 | Invalid request format | 400 | No |
-| | VAL-1002 | Required field missing | 400 | No |
-| | VAL-1003 | Invalid order ID | 400 | No |
-| | VAL-1010 | Order validation failed | 400 | No |
-| **INV-2xxx** | | **Inventory Errors** | **409** | **No** |
-| | INV-2001 | Insufficient stock | 409 | No |
-| | INV-2003 | Reservation failed | 409 | No |
-| | INV-2005 | Reservation not found | 409 | No |
-| **PAY-3xxx** | | **Payment Errors** | **402** | **No** |
-| | PAY-3001 | Authorization failed | 402 | No |
-| | PAY-3004 | Card declined | 402 | No |
-| | PAY-3007 | Fraud suspected | 402 | No |
-| **SYS-5xxx** | | **System Errors** | **500** | **Yes** |
-| | SYS-5001 | Internal error | 500 | Yes |
-| | SYS-5002 | Database error | 500 | Yes |
-| | SYS-5008 | Operation timeout | 500 | Yes |
-| **SAGA-6xxx** | | **Workflow Errors** | **500** | **Yes** |
-| | SAGA-6001 | Workflow failed | 500 | Yes |
-| | SAGA-6002 | Compensation failed | 500 | Yes |
-| | SAGA-6006 | Payment saga not found | 500 | Yes |
-| **RES-7xxx** | | **Resilience Errors** | **503** | **Yes** |
-| | RES-7001 | Circuit breaker open | 503 | Yes |
-| | RES-7002 | Bulkhead full | 503 | Yes |
-| | RES-7003 | Rate limited | 429 | Yes |
+| Category      | Code      | Description             | HTTP    | Retryable |
+| ------------- | --------- | ----------------------- | ------- | --------- |
+| **VAL-1xxx**  |           | **Validation Errors**   | **400** | **No**    |
+|               | VAL-1001  | Invalid request format  | 400     | No        |
+|               | VAL-1002  | Required field missing  | 400     | No        |
+|               | VAL-1003  | Invalid order ID        | 400     | No        |
+|               | VAL-1010  | Order validation failed | 400     | No        |
+| **INV-2xxx**  |           | **Inventory Errors**    | **409** | **No**    |
+|               | INV-2001  | Insufficient stock      | 409     | No        |
+|               | INV-2003  | Reservation failed      | 409     | No        |
+|               | INV-2005  | Reservation not found   | 409     | No        |
+| **PAY-3xxx**  |           | **Payment Errors**      | **402** | **No**    |
+|               | PAY-3001  | Authorization failed    | 402     | No        |
+|               | PAY-3004  | Card declined           | 402     | No        |
+|               | PAY-3007  | Fraud suspected         | 402     | No        |
+| **SYS-5xxx**  |           | **System Errors**       | **500** | **Yes**   |
+|               | SYS-5001  | Internal error          | 500     | Yes       |
+|               | SYS-5002  | Database error          | 500     | Yes       |
+|               | SYS-5008  | Operation timeout       | 500     | Yes       |
+| **SAGA-6xxx** |           | **Workflow Errors**     | **500** | **Yes**   |
+|               | SAGA-6001 | Workflow failed         | 500     | Yes       |
+|               | SAGA-6002 | Compensation failed     | 500     | Yes       |
+|               | SAGA-6006 | Payment saga not found  | 500     | Yes       |
+| **RES-7xxx**  |           | **Resilience Errors**   | **503** | **Yes**   |
+|               | RES-7001  | Circuit breaker open    | 503     | Yes       |
+|               | RES-7002  | Bulkhead full           | 503     | Yes       |
+|               | RES-7003  | Rate limited            | 429     | Yes       |
 
 **Error Response Format:**
 
@@ -1552,6 +1627,7 @@ flowchart TB
 ```
 
 **Benefits:**
+
 - Same customer always routes to same partition
 - Minimizes key remapping when partitions change (~25% remapped)
 - Even distribution across partitions
@@ -1578,48 +1654,48 @@ Connection pool and async executor tuning for high throughput:
 
 **Database (HikariCP):**
 
-| Setting | Value | Description |
-|:--------|------:|:------------|
-| `maximum-pool-size` | 30 | Max connections in pool |
-| `minimum-idle` | 10 | Min idle connections maintained |
-| `connection-timeout` | 10000ms | Max wait for connection |
-| `leak-detection-threshold` | 60000ms | Log warning if connection held too long |
-| `PreparedStatement cache` | 250 | Cached prepared statements per connection |
+| Setting                    |   Value | Description                               |
+| :------------------------- | ------: | :---------------------------------------- |
+| `maximum-pool-size`        |      30 | Max connections in pool                   |
+| `minimum-idle`             |      10 | Min idle connections maintained           |
+| `connection-timeout`       | 10000ms | Max wait for connection                   |
+| `leak-detection-threshold` | 60000ms | Log warning if connection held too long   |
+| `PreparedStatement cache`  |     250 | Cached prepared statements per connection |
 
 **Redis (Lettuce):**
 
-| Setting | Value | Description |
-|:--------|------:|:------------|
-| `max-active` | 32 | Max active connections |
-| `max-idle` | 16 | Max idle connections |
-| `min-idle` | 8 | Min idle connections |
-| `max-wait` | 1000ms | Max wait for connection |
+| Setting      |  Value | Description             |
+| :----------- | -----: | :---------------------- |
+| `max-active` |     32 | Max active connections  |
+| `max-idle`   |     16 | Max idle connections    |
+| `min-idle`   |      8 | Min idle connections    |
+| `max-wait`   | 1000ms | Max wait for connection |
 
 **Temporal Worker:**
 
-| Setting | Value | Description |
-|:--------|------:|:------------|
-| `max-concurrent-activities` | 50 | Max parallel activity executions |
-| `max-concurrent-workflows` | 200 | Max parallel workflow executions |
-| `max-concurrent-local-activities` | 100 | Max parallel local activities |
-| `sticky-queue-schedule-to-start-timeout` | 5s | Sticky execution timeout |
+| Setting                                  | Value | Description                      |
+| :--------------------------------------- | ----: | :------------------------------- |
+| `max-concurrent-activities`              |    50 | Max parallel activity executions |
+| `max-concurrent-workflows`               |   200 | Max parallel workflow executions |
+| `max-concurrent-local-activities`        |   100 | Max parallel local activities    |
+| `sticky-queue-schedule-to-start-timeout` |    5s | Sticky execution timeout         |
 
 **Async Task Executors:**
 
-| Executor | Core | Max | Queue | Purpose |
-|:---------|-----:|----:|------:|:--------|
-| `paymentTaskExecutor` | 10 | 50 | 100 | Default async operations |
-| `webhookTaskExecutor` | 5 | 25 | 200 | Webhook processing |
-| `compensationExecutor` | 5 | 20 | 50 | Rollback operations |
-| `outboxTaskExecutor` | 3 | 10 | 100 | Outbox polling |
-| `metricsTaskExecutor` | 2 | 5 | 500 | Background metrics |
+| Executor               | Core | Max | Queue | Purpose                  |
+| :--------------------- | ---: | --: | ----: | :----------------------- |
+| `paymentTaskExecutor`  |   10 |  50 |   100 | Default async operations |
+| `webhookTaskExecutor`  |    5 |  25 |   200 | Webhook processing       |
+| `compensationExecutor` |    5 |  20 |    50 | Rollback operations      |
+| `outboxTaskExecutor`   |    3 |  10 |   100 | Outbox polling           |
+| `metricsTaskExecutor`  |    2 |   5 |   500 | Background metrics       |
 
 **Feign Clients:**
 
-| Setting | Value | Description |
-|:--------|------:|:------------|
-| `default.connect-timeout` | 5000ms | Connection timeout for all clients |
-| `default.read-timeout` | 10000ms | Read timeout for all clients |
+| Setting                        |   Value | Description                          |
+| :----------------------------- | ------: | :----------------------------------- |
+| `default.connect-timeout`      |  5000ms | Connection timeout for all clients   |
+| `default.read-timeout`         | 10000ms | Read timeout for all clients         |
 | `payment-gateway.read-timeout` | 15000ms | Extended timeout for payment gateway |
 
 ### Resilience Verification
@@ -1659,32 +1735,32 @@ The platform supports a highly configurable Payment Product Funnel system that r
 
 ### Supported Payment Products
 
-| Product | Category | Key Characteristics |
-|:--------|:---------|:--------------------|
-| **Bank Transfer** | `FUNDS_TRANSFER` | ACH/Wire/SEPA, async confirmation (1-3 days) |
-| **Card Payment** | `CARD` | Existing flow enhanced with fees |
-| **Points & Loyalty** | `ALTERNATIVE` | Instant redemption, no inventory requirement |
-| **Loan Disbursement** | `LENDING` | Heavy compliance (KYC/AML), credit checks |
-| **Loan Settlement** | `LENDING` | Links to loan system |
-| **Investment Trading** | `TRADING` | T+2 settlement, brokerage integration |
-| **Bill Payment** | `RECURRING` | Scheduling support, biller verification |
-| **Multi-Source** | `COMPOSITE` | Split across multiple payment sources (child workflows) |
-| **Crypto** | `CRYPTO` | Blockchain confirmations, wallet verification |
-| **Merchant/Affiliate** | `B2B` | Custom fees, payout reconciliation |
+| Product                | Category         | Key Characteristics                                     |
+| :--------------------- | :--------------- | :------------------------------------------------------ |
+| **Bank Transfer**      | `FUNDS_TRANSFER` | ACH/Wire/SEPA, async confirmation (1-3 days)            |
+| **Card Payment**       | `CARD`           | Existing flow enhanced with fees                        |
+| **Points & Loyalty**   | `ALTERNATIVE`    | Instant redemption, no inventory requirement            |
+| **Loan Disbursement**  | `LENDING`        | Heavy compliance (KYC/AML), credit checks               |
+| **Loan Settlement**    | `LENDING`        | Links to loan system                                    |
+| **Investment Trading** | `TRADING`        | T+2 settlement, brokerage integration                   |
+| **Bill Payment**       | `RECURRING`      | Scheduling support, biller verification                 |
+| **Multi-Source**       | `COMPOSITE`      | Split across multiple payment sources (child workflows) |
+| **Crypto**             | `CRYPTO`         | Blockchain confirmations, wallet verification           |
+| **Merchant/Affiliate** | `B2B`            | Custom fees, payout reconciliation                      |
 
 ### Payment Categories
 
-| Category | Products | Compliance | Settlement |
-|:---------|:---------|:-----------|:-----------|
-| `FUNDS_TRANSFER` | Bank Transfer | Standard | 1-3 days |
-| `CARD` | Card Payment | Standard | Instant |
-| `ALTERNATIVE` | Points & Loyalty | Standard | Instant |
-| `LENDING` | Loan Disbursement, Loan Settlement | Enhanced (KYC/AML) | 1-5 days |
-| `TRADING` | Investment Trading | Enhanced | T+2 |
-| `RECURRING` | Bill Payment | Standard | Scheduled |
-| `COMPOSITE` | Multi-Source | Standard | Varies |
-| `CRYPTO` | Crypto | Enhanced | Confirmations |
-| `B2B` | Merchant/Affiliate | Standard | Net-30/60 |
+| Category         | Products                           | Compliance         | Settlement    |
+| :--------------- | :--------------------------------- | :----------------- | :------------ |
+| `FUNDS_TRANSFER` | Bank Transfer                      | Standard           | 1-3 days      |
+| `CARD`           | Card Payment                       | Standard           | Instant       |
+| `ALTERNATIVE`    | Points & Loyalty                   | Standard           | Instant       |
+| `LENDING`        | Loan Disbursement, Loan Settlement | Enhanced (KYC/AML) | 1-5 days      |
+| `TRADING`        | Investment Trading                 | Enhanced           | T+2           |
+| `RECURRING`      | Bill Payment                       | Standard           | Scheduled     |
+| `COMPOSITE`      | Multi-Source                       | Standard           | Varies        |
+| `CRYPTO`         | Crypto                             | Enhanced           | Confirmations |
+| `B2B`            | Merchant/Affiliate                 | Standard           | Net-30/60     |
 
 ### Fee Calculation Engine
 
@@ -1692,12 +1768,12 @@ The platform includes a sophisticated fee calculation engine supporting multiple
 
 **Fee Types:**
 
-| Type | Description | Example |
-|:-----|:------------|:--------|
-| `FLAT` | Fixed amount regardless of transaction size | $0.30 per transaction |
-| `PERCENTAGE` | Percentage of transaction amount | 2.9% of amount |
-| `TIERED` | Variable rate based on amount brackets | 0-$1K: $0.50, $1K-$10K: $1.00 |
-| `HYBRID` | Combination of flat + percentage | 2.9% + $0.30 |
+| Type         | Description                                 | Example                       |
+| :----------- | :------------------------------------------ | :---------------------------- |
+| `FLAT`       | Fixed amount regardless of transaction size | $0.30 per transaction         |
+| `PERCENTAGE` | Percentage of transaction amount            | 2.9% of amount                |
+| `TIERED`     | Variable rate based on amount brackets      | 0-$1K: $0.50, $1K-$10K: $1.00 |
+| `HYBRID`     | Combination of flat + percentage            | 2.9% + $0.30                  |
 
 ```mermaid
 flowchart TB
@@ -1746,45 +1822,45 @@ Each payment product has configurable workflow steps, validations, and channels:
 
 **CARD_PAYMENT:**
 
-| Attribute | Value |
-|:----------|:------|
+| Attribute      | Value                                                                   |
+| :------------- | :---------------------------------------------------------------------- |
 | Workflow Steps | `VALIDATE` → `RESERVE_INVENTORY` → `AUTHORIZE` → `CAPTURE` → `COMPLETE` |
-| Validations | `CUSTOMER_VERIFIED`, `MERCHANT_ACTIVE` |
-| Channels | STRIPE, ADYEN, PAYPAL |
-| Priority | NORMAL |
-| Timeout | 5 min |
+| Validations    | `CUSTOMER_VERIFIED`, `MERCHANT_ACTIVE`                                  |
+| Channels       | STRIPE, ADYEN, PAYPAL                                                   |
+| Priority       | NORMAL                                                                  |
+| Timeout        | 5 min                                                                   |
 
 **BANK_TRANSFER:**
 
-| Attribute | Value |
-|:----------|:------|
+| Attribute      | Value                                                               |
+| :------------- | :------------------------------------------------------------------ |
 | Workflow Steps | `VALIDATE` → `VERIFY_SOURCE` → `VERIFY_DEST` → `INITIATE` → `AWAIT` |
-| Validations | `CUSTOMER_VERIFIED`, `KYC_COMPLETE` |
-| Channels | PLAID, STRIPE_ACH, WIRE |
-| Priority | NORMAL |
-| Timeout | 3 days |
+| Validations    | `CUSTOMER_VERIFIED`, `KYC_COMPLETE`                                 |
+| Channels       | PLAID, STRIPE_ACH, WIRE                                             |
+| Priority       | NORMAL                                                              |
+| Timeout        | 3 days                                                              |
 
 **MULTI_SOURCE:**
 
-| Attribute | Value |
-|:----------|:------|
+| Attribute      | Value                                                                  |
+| :------------- | :--------------------------------------------------------------------- |
 | Workflow Steps | `VALIDATE` → `ALLOCATE` → `PROCESS_SOURCES` → `AGGREGATE` → `COMPLETE` |
-| Validations | `CUSTOMER_VERIFIED`, `ALL_SOURCES_VALID` |
-| Channels | INTERNAL |
-| Priority | NORMAL |
-| Timeout | 10 min |
-| Notes | Spawns child workflows for each payment source |
+| Validations    | `CUSTOMER_VERIFIED`, `ALL_SOURCES_VALID`                               |
+| Channels       | INTERNAL                                                               |
+| Priority       | NORMAL                                                                 |
+| Timeout        | 10 min                                                                 |
+| Notes          | Spawns child workflows for each payment source                         |
 
 **CRYPTO:**
 
-| Attribute | Value |
-|:----------|:------|
+| Attribute      | Value                                                          |
+| :------------- | :------------------------------------------------------------- |
 | Workflow Steps | `VALIDATE` → `CHECK_BALANCE` → `INITIATE` → `AWAIT_BLOCKCHAIN` |
-| Validations | `WALLET_VERIFIED`, `KYC_COMPLETE` |
-| Channels | COINBASE, CIRCLE |
-| Priority | HIGH |
-| Timeout | 1 hour |
-| Notes | Requires 6 blockchain confirmations |
+| Validations    | `WALLET_VERIFIED`, `KYC_COMPLETE`                              |
+| Channels       | COINBASE, CIRCLE                                               |
+| Priority       | HIGH                                                           |
+| Timeout        | 1 hour                                                         |
+| Notes          | Requires 6 blockchain confirmations                            |
 
 ### Rule-Based Product Router
 
@@ -2066,24 +2142,24 @@ kubectl apply -k k8s/overlays/eks/
 
 ## Infrastructure Services
 
-| Service                | Port | Description                    |
-| ---------------------- | ---- | ------------------------------ |
-| Kong Gateway           | 80   | API Gateway (Ingress)          |
-| Orchestrator           | 9090 | Payment SAGA API               |
-| Order Service          | 8081 | Order management               |
-| Inventory Service      | 8082 | Stock management               |
-| Payment Gateway        | 8083 | Payment processing             |
-| PostgreSQL (saga)      | 5432 | Orchestrator database          |
-| PostgreSQL (order)     | 5433 | Order service database         |
-| PostgreSQL (inventory) | 5434 | Inventory service database     |
-| PostgreSQL (payment)   | 5435 | Payment gateway database       |
-| Temporal               | 7233 | Workflow engine                |
-| Temporal UI            | 8080 | Workflow visibility            |
-| Kafka                  | 9092 | Event streaming                |
-| Redis                  | 6379 | Caching                        |
-| Zipkin                 | 9411 | Distributed tracing            |
-| Prometheus             | 9099 | Metrics collection             |
-| Grafana                | 3000 | Metrics visualization          |
+| Service                | Port | Description                |
+| ---------------------- | ---- | -------------------------- |
+| Kong Gateway           | 80   | API Gateway (Ingress)      |
+| Orchestrator           | 9090 | Payment SAGA API           |
+| Order Service          | 8081 | Order management           |
+| Inventory Service      | 8082 | Stock management           |
+| Payment Gateway        | 8083 | Payment processing         |
+| PostgreSQL (saga)      | 5432 | Orchestrator database      |
+| PostgreSQL (order)     | 5433 | Order service database     |
+| PostgreSQL (inventory) | 5434 | Inventory service database |
+| PostgreSQL (payment)   | 5435 | Payment gateway database   |
+| Temporal               | 7233 | Workflow engine            |
+| Temporal UI            | 8080 | Workflow visibility        |
+| Kafka                  | 9092 | Event streaming            |
+| Redis                  | 6379 | Caching                    |
+| Zipkin                 | 9411 | Distributed tracing        |
+| Prometheus             | 9099 | Metrics collection         |
+| Grafana                | 3000 | Metrics visualization      |
 
 ## API Usage
 
@@ -2192,6 +2268,7 @@ flowchart LR
 ### Alerting
 
 Prometheus alerting rules for critical conditions:
+
 - High payment failure rate (>10%)
 - Circuit breaker open
 - Kafka consumer lag (>1000 messages)
@@ -2201,15 +2278,18 @@ Prometheus alerting rules for critical conditions:
 ### Service Discovery & API Gateway
 
 **Kong Gateway (Kubernetes)**
+
 - Routes external traffic to backend services
 - Provides rate limiting, correlation IDs, and security headers
 - Kong plugins configured in `k8s/base/kong/kong-plugins.yaml`
 
 **Kubernetes DNS (K8s profiles)**
+
 - Services discovered via K8s DNS: `<service-name>.<namespace>.svc.cluster.local`
 - Spring Cloud Kubernetes LoadBalancer enabled for `k8s` and `eks` profiles
 
 **Local Development (local profile)**
+
 - Direct URL configuration via `spring.cloud.openfeign.client.config.<service>.url`
 - No service discovery needed for local development
 
@@ -2245,32 +2325,32 @@ flowchart TB
 
 ### Kong Ingress Routes
 
-| Path | Service | Port | Description |
-|------|---------|------|-------------|
-| `/api/v1/payments` | payment-saga-orchestrator | 9090 | Payment SAGA API |
-| `/api/v1/fees` | payment-saga-orchestrator | 9090 | Fee calculation |
-| `/api/orders` | order-service | 8081 | Order management |
-| `/api/inventory` | inventory-service | 8082 | Inventory management |
-| `/api/webhooks` | payment-gateway-service | 8083 | Webhook endpoints |
-| `/api/payments` | payment-gateway-service | 8083 | Internal payments |
+| Path               | Service                   | Port | Description          |
+| ------------------ | ------------------------- | ---- | -------------------- |
+| `/api/v1/payments` | payment-saga-orchestrator | 9090 | Payment SAGA API     |
+| `/api/v1/fees`     | payment-saga-orchestrator | 9090 | Fee calculation      |
+| `/api/orders`      | order-service             | 8081 | Order management     |
+| `/api/inventory`   | inventory-service         | 8082 | Inventory management |
+| `/api/webhooks`    | payment-gateway-service   | 8083 | Webhook endpoints    |
+| `/api/payments`    | payment-gateway-service   | 8083 | Internal payments    |
 
 ### Kong Plugins
 
-| Plugin | Configuration | Purpose |
-|--------|---------------|---------|
-| `rate-limiting` | 100/min (payments), 1000/min (global) | Prevent API abuse |
-| `correlation-id` | X-Correlation-ID header | Distributed tracing |
-| `request-size-limiting` | 10MB max | Protect against large payloads |
-| `response-transformer` | Security headers | X-Frame-Options, X-Content-Type-Options |
+| Plugin                  | Configuration                         | Purpose                                 |
+| ----------------------- | ------------------------------------- | --------------------------------------- |
+| `rate-limiting`         | 100/min (payments), 1000/min (global) | Prevent API abuse                       |
+| `correlation-id`        | X-Correlation-ID header               | Distributed tracing                     |
+| `request-size-limiting` | 10MB max                              | Protect against large payloads          |
+| `response-transformer`  | Security headers                      | X-Frame-Options, X-Content-Type-Options |
 
 ### Spring Profiles
 
-| Profile | Service Discovery | Use Case |
-|---------|-------------------|----------|
-| `local` | Direct URLs in config | Local development without K8s |
-| `docker` | Docker Compose service names | Docker Compose environment |
-| `k8s` | Kubernetes DNS + Spring Cloud K8s | Kubernetes (Minikube, Kind) |
-| `eks` | Kubernetes DNS + Spring Cloud K8s | AWS EKS production |
+| Profile  | Service Discovery                 | Use Case                      |
+| -------- | --------------------------------- | ----------------------------- |
+| `local`  | Direct URLs in config             | Local development without K8s |
+| `docker` | Docker Compose service names      | Docker Compose environment    |
+| `k8s`    | Kubernetes DNS + Spring Cloud K8s | Kubernetes (Minikube, Kind)   |
+| `eks`    | Kubernetes DNS + Spring Cloud K8s | AWS EKS production            |
 
 ### Deployment Commands
 
@@ -2300,6 +2380,8 @@ kubectl logs -l app=kong -n kong
 ## Documentation
 
 ### Architecture Guides
+
+- [API Gateway Architecture](docs/API_GATEWAY_ARCHITECTURE.md) - Kong + Istio layered gateway architecture with service mesh
 - [T24 Core Banking Integration](docs/T24_CORE_BANKING_INTEGRATION.md) - SAGA pattern for Temenos T24 integration
 - [Temporal Scaling Architecture](docs/TEMPORAL_SCALING_ARCHITECTURE.md) - Customer-hash sharding for 500+ TPS horizontal scaling
 - [Temporal vs Kafka Integration](docs/temporal-kafka-integration.md) - When to use each and how they complement each other
@@ -2307,12 +2389,15 @@ kubectl logs -l app=kong -n kong
 - [Hybrid SAGA Pattern Guide](docs/pattern1-comprehensive-guide.md) - Temporal + Spring State Machine pattern
 
 ### Security
+
 - [Security Architecture](docs/Security.md) - Comprehensive security architecture covering authentication, mTLS, webhook security, secrets management, and PCI-DSS compliance
 
 ### Operations & Observability
+
 - [Observability Guide](docs/Observability.md) - Correlation tracking, metrics, dashboards, and alerting
 - [Logging Standards](docs/LOGGING_STANDARDS.md) - Log patterns, MDC keys, and prefix conventions
 
 ### Planning & Migration
+
 - [Enhancement Plan](docs/ENHANCEMENT_PLAN.md) - Planned improvements
 - [Kong Migration Plan](docs/KONG_MIGRATION_PLAN.md) - Migration from Eureka to Kong Gateway
