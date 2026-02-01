@@ -24,95 +24,62 @@
 
 When you store data in a Temporal workflow, you're not just storing it in memory. **Every state change is persisted to Temporal's event history**. This is what makes workflows durable, but it's also what causes the anti-pattern.
 
+```mermaid
+flowchart TB
+    subgraph Code["YOUR CODE"]
+        C1["private List&lt;Transaction&gt; transactions = new ArrayList&lt;&gt;()"]
+        C2["transactions.add(new Transaction(...)) // You add 1 item"]
+    end
+
+    subgraph Step1["STEP 1: Serialize Workflow State"]
+        S1["Workflow State Snapshot<br/>~2 KB for 1 transaction"]
+    end
+
+    subgraph Step2["STEP 2: Store as Event in History"]
+        E1["Event 1: WorkflowStarted (500 bytes)"]
+        E2["Event 2: ActivityScheduled (1 KB)"]
+        E3["Event 3: ActivityCompleted (2 KB)"]
+        E4["Event 4: MarkerRecorded - ENTIRE state (2 KB)"]
+        E5["TOTAL: 5.5 KB"]
+    end
+
+    subgraph Problem["⚠️ ADD 100 MORE TRANSACTIONS"]
+        P1["Event 5: State [TXN-001, TXN-002] → 4 KB"]
+        P2["Event 6: State [TXN-001...TXN-003] → 6 KB"]
+        P3["Event 7: State [TXN-001...TXN-004] → 8 KB"]
+        P4["..."]
+        P5["Event 104: State [TXN-001...TXN-100] → 200 KB"]
+        P6["TOTAL HISTORY: 10 MB+ !!!<br/>O(n²) complexity!"]
+    end
+
+    subgraph Impact["❌ AT 1,000 TRANSACTIONS"]
+        I1["History Size: ~1 GB"]
+        I2["Load Time: 30+ seconds"]
+        I3["Memory Usage: 2 GB"]
+        I4["Result: WORKFLOW UNUSABLE"]
+    end
+
+    Code --> Step1 --> Step2 --> Problem --> Impact
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                 HOW TEMPORAL WORKFLOW STATE WORKS                   │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  Your Code:                                                         │
-│  ──────────                                                         │
-│    private List<Transaction> transactions = new ArrayList<>();      │
-│    transactions.add(new Transaction(...));  // You add 1 item       │
-│                                                                     │
-│  What Temporal Does Behind the Scenes:                              │
-│  ─────────────────────────────────────────                          │
-│                                                                     │
-│  Step 1: Serialize Your Workflow State                              │
-│    ┌────────────────────────────────────────────────────┐           │
-│    │ Workflow State Snapshot                            │           │
-│    │ {                                                  │           │
-│    │   "transactions": [                                │           │
-│    │     {                                              │           │
-│    │       "id": "TXN-001",                             │           │
-│    │       "amount": 150000,                            │           │
-│    │       "currency": "VND",                           │           │
-│    │       "timestamp": "2026-01-23T10:30:00Z",         │           │
-│    │       "customer": {                                │           │
-│    │         "name": "Nguyen Van A",                    │           │
-│    │         "email": "nguyen@example.com",             │           │
-│    │         "phone": "+84 xxx xxx xxx",                │           │
-│    │         "address": "123 Le Loi St, District 1..."  │           │
-│    │       },                                           │           │
-│    │       "items": [ ... ],                            │           │
-│    │       "metadata": { ... }                          │           │
-│    │     }                                              │           │
-│    │   ]                                                │           │
-│    │ }                                                  │           │
-│    └────────────────────────────────────────────────────┘           │
-│    Size: ~2 KB for 1 transaction                                    │
-│                                                                     │
-│  Step 2: Store as Event in History                                  │
-│    ┌────────────────────────────────────────────────────┐           │
-│    │ Temporal Event History (PostgreSQL)                │           │
-│    │                                                    │           │
-│    │ Event 1: WorkflowStarted                           │           │
-│    │   Size: 500 bytes                                  │           │
-│    │                                                    │           │
-│    │ Event 2: ActivityScheduled (createTransaction)     │           │
-│    │   Size: 1 KB                                       │           │
-│    │                                                    │           │
-│    │ Event 3: ActivityCompleted                         │           │
-│    │   Payload: Full transaction object (2 KB)          │           │
-│    │   Size: 2 KB                                       │           │
-│    │                                                    │           │
-│    │ Event 4: MarkerRecorded (state snapshot)           │           │
-│    │   Payload: ENTIRE workflow state (2 KB)            │           │
-│    │   Size: 2 KB                                       │           │
-│    │                                                    │           │
-│    │ TOTAL SO FAR: 5.5 KB                               │           │
-│    └────────────────────────────────────────────────────┘           │
-│                                                                     │
-│  Now Add 100 More Transactions...                                   │
-│    ┌────────────────────────────────────────────────────┐           │
-│    │ Event 5-204: 100 more transactions                 │           │
-│    │                                                    │           │
-│    │ PROBLEM: Each new transaction adds to state!       │           │
-│    │                                                    │           │
-│    │ Event 5: State = [TXN-001, TXN-002]  → 4 KB        │           │
-│    │ Event 6: State = [TXN-001, TXN-002, TXN-003] → 6KB │           │
-│    │ Event 7: State = [TXN-001...TXN-004] → 8 KB        │           │
-│    │ ...                                                │           │
-│    │ Event 104: State = [TXN-001...TXN-100] → 200 KB    │           │
-│    │                                                    │           │
-│    │ TOTAL HISTORY SIZE: 10 MB+ !!!                     │           │
-│    │                                                    │           │
-│    │ Growth Pattern:                                    │           │
-│    │   • Linear data (100 transactions)                 │           │
-│    │   • QUADRATIC storage (10 MB)                      │           │
-│    │   • O(n²) complexity!                              │           │
-│    └────────────────────────────────────────────────────┘           │
-│                                                                     │
-│  What Happens at 1,000 Transactions?                                │
-│    ┌────────────────────────────────────────────────────┐           │
-│    │ History Size: ~1 GB (gigabyte!)                    │           │
-│    │ Load Time: 30+ seconds                             │           │
-│    │ Memory Usage: 2 GB (need to load in memory)        │           │
-│    │ Database Impact: Massive table scans               │           │
-│    │                                                    │           │
-│    │ Result: WORKFLOW UNUSABLE                          │           │
-│    └────────────────────────────────────────────────────┘           │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
+
+**Example Workflow State Snapshot (~2 KB per transaction):**
+```json
+{
+  "transactions": [{
+    "id": "TXN-001",
+    "amount": 150000,
+    "currency": "VND",
+    "timestamp": "2026-01-23T10:30:00Z",
+    "customer": {
+      "name": "Nguyen Van A",
+      "email": "nguyen@example.com",
+      "phone": "+84 xxx xxx xxx",
+      "address": "123 Le Loi St, District 1..."
+    },
+    "items": [ ... ],
+    "metadata": { ... }
+  }]
+}
 ```
 
 ### Why This Happens
@@ -178,28 +145,24 @@ public class PaymentWorkflow {
 
 Every workflow execution creates a series of events:
 
-```
-Temporal Event History Table:
+**Temporal Event History Table:**
 
-┌──────┬────────────────────────┬──────────┬─────────────────────────┐
-│ ID   │ Event Type             │ Size     │ Payload                 │
-├──────┼────────────────────────┼──────────┼─────────────────────────┤
-│ 1    │ WorkflowStarted        │ 10 KB    │ PaymentRequest object   │
-│ 2    │ ActivityScheduled      │ 1 KB     │ Activity params         │
-│ 3    │ ActivityCompleted      │ 2 KB     │ Transaction result      │
-│ 4    │ MarkerRecorded         │ 2 KB     │ Workflow state snapshot │
-│ 5    │ ActivityScheduled      │ 1 KB     │ ...                     │
-│ 6    │ ActivityCompleted      │ 2 KB     │ ...                     │
-│ 7    │ MarkerRecorded         │ 4 KB     │ State (now 2 txns)      │
-│ 8    │ ActivityScheduled      │ 1 KB     │ ...                     │
-│ 9    │ ActivityCompleted      │ 2 KB     │ ...                     │
-│ 10   │ MarkerRecorded         │ 6 KB     │ State (now 3 txns)      │
-│ ...  │ ...                    │ ...      │ ...                     │
-│ 500  │ MarkerRecorded         │ 200 KB   │ State (now 100 txns)    │
-└──────┴────────────────────────┴──────────┴─────────────────────────┘
+| ID | Event Type | Size | Payload |
+|:---|:-----------|:-----|:--------|
+| 1 | WorkflowStarted | 10 KB | PaymentRequest object |
+| 2 | ActivityScheduled | 1 KB | Activity params |
+| 3 | ActivityCompleted | 2 KB | Transaction result |
+| 4 | MarkerRecorded | 2 KB | Workflow state snapshot |
+| 5 | ActivityScheduled | 1 KB | ... |
+| 6 | ActivityCompleted | 2 KB | ... |
+| 7 | MarkerRecorded | 4 KB | State (now 2 txns) |
+| 8 | ActivityScheduled | 1 KB | ... |
+| 9 | ActivityCompleted | 2 KB | ... |
+| 10 | MarkerRecorded | 6 KB | State (now 3 txns) |
+| ... | ... | ... | ... |
+| 500 | MarkerRecorded | **200 KB** | State (now 100 txns) |
 
-TOTAL: 10+ MB for one workflow!
-```
+**TOTAL: 10+ MB for one workflow!**
 
 ### The Replay Problem
 
@@ -1019,144 +982,74 @@ LIMIT 10;
 
 ### Memory Usage Comparison
 
-```
-┌────────────────────────────────────────────────────────────────┐
-│           MEMORY USAGE: ANTI-PATTERN VS CORRECT                │
-├────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  Scenario: 1,000 concurrent workflows                          │
-│  Each processing 100 order items                               │
-│                                                                  │
-│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
-│  ANTI-PATTERN (Storing full objects)                           │
-│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
-│                                                                  │
-│  Per Workflow:                                                  │
-│    • Workflow state:        500 KB                             │
-│    • Event history:         150 MB                             │
-│    • Total in memory:       500 MB (when replaying)            │
-│                                                                  │
-│  1,000 Workflows:                                              │
-│    • Total workflow state:  500 GB                             │
-│    • Total history:         150 TB (in database)               │
-│    • Active memory:         500 GB                             │
-│                                                                  │
-│  Infrastructure Required:                                       │
-│    • Temporal workers:      50+ servers (10 GB RAM each)       │
-│    • Database:              Multi-TB PostgreSQL cluster        │
-│    • Est. monthly cost:     $25,000+                           │
-│                                                                  │
-│  Performance:                                                   │
-│    • Workflow replay:       30-60 seconds                      │
-│    • Database queries:      Slow (scanning gigabytes)          │
-│    • System stability:      POOR (frequent OOMs)               │
-│                                                                  │
-│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
-│  CORRECT PATTERN (Storing references)                          │
-│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
-│                                                                  │
-│  Per Workflow:                                                  │
-│    • Workflow state:        200 bytes                          │
-│    • Event history:         500 KB                             │
-│    • Total in memory:       1 MB (when replaying)              │
-│                                                                  │
-│  1,000 Workflows:                                              │
-│    • Total workflow state:  200 MB                             │
-│    • Total history:         500 GB (in database)               │
-│    • Active memory:         1 GB                               │
-│                                                                  │
-│  Infrastructure Required:                                       │
-│    • Temporal workers:      3-5 servers (10 GB RAM each)       │
-│    • Database:              Standard PostgreSQL instance       │
-│    • Est. monthly cost:     $2,000                             │
-│                                                                  │
-│  Performance:                                                   │
-│    • Workflow replay:       <1 second                          │
-│    • Database queries:      Fast (indexed lookups)             │
-│    • System stability:      EXCELLENT                          │
-│                                                                  │
-│  ════════════════════════════════════════════════════════════  │
-│  SAVINGS                                                        │
-│  ════════════════════════════════════════════════════════════  │
-│                                                                  │
-│  Memory:           500x less (500 GB → 1 GB)                   │
-│  Infrastructure:   90% cost reduction ($25K → $2K/month)       │
-│  Replay speed:     60x faster (60s → 1s)                       │
-│  Stability:        No OOMs, predictable performance            │
-│                                                                  │
-└────────────────────────────────────────────────────────────────┘
-```
+**Scenario:** 1,000 concurrent workflows, each processing 100 order items
+
+| Metric | ❌ Anti-Pattern (Full Objects) | ✅ Correct (References Only) |
+|:-------|:-------------------------------|:-----------------------------|
+| **Per Workflow** | | |
+| Workflow state | 500 KB | 200 bytes |
+| Event history | 150 MB | 500 KB |
+| Total in memory (replay) | 500 MB | 1 MB |
+| **1,000 Workflows** | | |
+| Total workflow state | 500 GB | 200 MB |
+| Total history (database) | 150 TB | 500 GB |
+| Active memory | 500 GB | 1 GB |
+| **Infrastructure** | | |
+| Temporal workers | 50+ servers (10 GB RAM each) | 3-5 servers (10 GB RAM each) |
+| Database | Multi-TB PostgreSQL cluster | Standard PostgreSQL instance |
+| Est. monthly cost | $25,000+ | $2,000 |
+| **Performance** | | |
+| Workflow replay | 30-60 seconds | <1 second |
+| Database queries | Slow (scanning gigabytes) | Fast (indexed lookups) |
+| System stability | POOR (frequent OOMs) | EXCELLENT |
+
+**Savings Summary:**
+| Metric | Improvement |
+|:-------|:------------|
+| Memory | 500x less (500 GB → 1 GB) |
+| Infrastructure | 90% cost reduction ($25K → $2K/month) |
+| Replay speed | 60x faster (60s → 1s) |
+| Stability | No OOMs, predictable performance |
 
 ### Database Impact
 
+**Temporal Event History Table Comparison:**
+
+| Metric | ❌ Anti-Pattern (Large States) | ✅ Correct (Small States) |
+|:-------|:-------------------------------|:--------------------------|
+| Row size (avg) | ~300 KB | ~1 KB |
+| Rows per workflow | 500 | 500 |
+| Total per workflow | 150 MB | 500 KB |
+| **For 1,000 workflows:** | | |
+| Total table size | 150 TB | 500 GB |
+| Index size | 30 TB | 100 GB |
+| Query time | 10-30 seconds (full table scan!) | <500 ms (index scan) |
+| IOPS required | 50,000+ (SSD required) | 2,000 (standard disk OK) |
+
+**Workflow Replay Query:**
+```sql
+SELECT * FROM events WHERE workflow_id = 'xxx' ORDER BY event_id;
 ```
-┌────────────────────────────────────────────────────────────────┐
-│          DATABASE LOAD: ANTI-PATTERN VS CORRECT                │
-├────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ANTI-PATTERN (Large workflow states)                          │
-│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
-│                                                                  │
-│  Temporal Event History Table:                                 │
-│    • Row size:          ~300 KB (avg)                          │
-│    • Rows per workflow: 500                                    │
-│    • Total per workflow: 150 MB                                │
-│                                                                  │
-│  For 1,000 workflows:                                          │
-│    • Total table size:   150 TB                                │
-│    • Index size:         30 TB                                 │
-│    • Query time:         10-30 seconds (full table scan!)      │
-│    • IOPS required:      50,000+ (SSD required)                │
-│                                                                  │
-│  Workflow Replay Query:                                        │
-│    SELECT * FROM events                                        │
-│    WHERE workflow_id = 'xxx'                                   │
-│    ORDER BY event_id;                                          │
-│                                                                  │
-│    Result set: 150 MB                                          │
-│    Transfer time: 10-20 seconds                                │
-│    CPU deserialize: 10-15 seconds                              │
-│    Total: 30+ seconds                                          │
-│                                                                  │
-│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
-│  CORRECT PATTERN (Small workflow states)                       │
-│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
-│                                                                  │
-│  Temporal Event History Table:                                 │
-│    • Row size:          ~1 KB (avg)                            │
-│    • Rows per workflow: 500                                    │
-│    • Total per workflow: 500 KB                                │
-│                                                                  │
-│  For 1,000 workflows:                                          │
-│    • Total table size:   500 GB                                │
-│    • Index size:         100 GB                                │
-│    • Query time:         <500 ms (index scan)                  │
-│    • IOPS required:      2,000 (standard disk OK)              │
-│                                                                  │
-│  Workflow Replay Query:                                        │
-│    Same query, but:                                            │
-│    Result set: 500 KB                                          │
-│    Transfer time: <100 ms                                      │
-│    CPU deserialize: <500 ms                                    │
-│    Total: <1 second                                            │
-│                                                                  │
-│  Application Database (PaymentRequest storage):                │
-│    payment_requests table:                                     │
-│      • Row size: ~180 KB                                       │
-│      • For 1,000 workflows: 180 MB                             │
-│      • Indexed lookups: <10 ms                                 │
-│                                                                  │
-│  ════════════════════════════════════════════════════════════  │
-│  IMPROVEMENT                                                    │
-│  ════════════════════════════════════════════════════════════  │
-│                                                                  │
-│  Storage:         300x less (150 TB → 500 GB + 180 MB)        │
-│  Query time:      30x faster (30s → <1s)                       │
-│  IOPS:            25x less (50K → 2K)                          │
-│  Cost:            90% less                                     │
-│                                                                  │
-└────────────────────────────────────────────────────────────────┘
-```
+
+| Metric | ❌ Anti-Pattern | ✅ Correct |
+|:-------|:---------------|:-----------|
+| Result set | 150 MB | 500 KB |
+| Transfer time | 10-20 seconds | <100 ms |
+| CPU deserialize | 10-15 seconds | <500 ms |
+| **Total** | **30+ seconds** | **<1 second** |
+
+**Application Database (PaymentRequest storage) with correct pattern:**
+- Row size: ~180 KB
+- For 1,000 workflows: 180 MB
+- Indexed lookups: <10 ms
+
+**Improvement Summary:**
+| Metric | Improvement |
+|:-------|:------------|
+| Storage | 300x less (150 TB → 500 GB + 180 MB) |
+| Query time | 30x faster (30s → <1s) |
+| IOPS | 25x less (50K → 2K) |
+| Cost | 90% less |
 
 ---
 

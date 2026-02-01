@@ -30,70 +30,63 @@ This document defines the comprehensive security architecture for the Paylink Pa
 
 The Paylink payment platform implements a defense-in-depth security strategy with multiple layers of protection:
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                              EXTERNAL ZONE                                       │
-│  ┌─────────────┐    ┌─────────────────────────┐    ┌─────────────────────────┐ │
-│  │ Mobile Apps │    │ Partner Systems (B2B)   │    │  Payment Webhooks       │ │
-│  └──────┬──────┘    └────────────┬────────────┘    └────────────┬────────────┘ │
-│         │                        │                               │              │
-│         ▼                        ▼                               ▼              │
-│  ┌──────────────────────────────────────────────────────────────────────────┐   │
-│  │                    AWS Application Load Balancer                          │   │
-│  │                    • TLS 1.3 Termination                                  │   │
-│  │                    • WAF Integration                                      │   │
-│  │                    • DDoS Protection (Shield)                             │   │
-│  └──────────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────────┘
-                                        │
-┌───────────────────────────────────────┼─────────────────────────────────────────┐
-│                                 DMZ ZONE                                         │
-│                                       ▼                                          │
-│  ┌──────────────────────────────────────────────────────────────────────────┐   │
-│  │                         KONG API GATEWAY                                  │   │
-│  │  ┌────────────────────────────────────────────────────────────────────┐  │   │
-│  │  │ • OAuth 2.0 Token Introspection (validate JWT/opaque tokens)       │  │   │
-│  │  │ • Rate Limiting (per-tenant, per-IP, per-endpoint)                 │  │   │
-│  │  │ • Bot Protection (device fingerprinting, CAPTCHA)                  │  │   │
-│  │  │ • Request/Response Transformation (claim forwarding)               │  │   │
-│  │  │ • mTLS for B2B Partners (client certificate authentication)        │  │   │
-│  │  │ • Security Headers (CSP, HSTS, X-Frame-Options)                    │  │   │
-│  │  │ • Request Size Limiting (10MB max)                                 │  │   │
-│  │  │ • Correlation ID Injection                                         │  │   │
-│  │  └────────────────────────────────────────────────────────────────────┘  │   │
-│  └──────────────────────────────────────────────────────────────────────────┘   │
-└───────────────────────────────────────┼─────────────────────────────────────────┘
-                                        │ mTLS (internal)
-┌───────────────────────────────────────┼─────────────────────────────────────────┐
-│                              INTERNAL ZONE                                       │
-│                                       ▼                                          │
-│  ┌──────────────────────────────────────────────────────────────────────────┐   │
-│  │                    Payment SAGA Orchestrator                              │   │
-│  │  ┌────────────────────────────────────────────────────────────────────┐  │   │
-│  │  │ • JWT Validation (Spring Security Resource Server)                 │  │   │
-│  │  │ • Permission-Based Authorization (@PreAuthorize)                   │  │   │
-│  │  │ • Tenant Context Propagation (MDC, headers)                        │  │   │
-│  │  │ • Audit Logging (7-year retention)                                 │  │   │
-│  │  │ • Idempotency Protection                                           │  │   │
-│  │  └────────────────────────────────────────────────────────────────────┘  │   │
-│  └─────────────────────────────────────┬────────────────────────────────────┘   │
-│                                        │ mTLS (SPIFFE/SPIRE)                     │
-│         ┌──────────────────────────────┼──────────────────────────┐             │
-│         ▼                              ▼                          ▼             │
-│  ┌────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐    │
-│  │  Order Service │  │  Inventory Service     │  │  Payment Gateway       │    │
-│  │  • RLS Enabled │  │  • RLS Enabled         │  │  • Webhook Verification│    │
-│  │  • Tenant-Aware│  │  • Tenant-Aware        │  │  • IP Allowlisting     │    │
-│  └────────────────┘  └────────────────────────┘  └────────────────────────┘    │
-│                                                                                  │
-│  ┌──────────────────────────────────────────────────────────────────────────┐   │
-│  │                           DATA LAYER                                      │   │
-│  │  • PostgreSQL with Row-Level Security (RLS)                               │   │
-│  │  • Encryption at Rest (AES-256)                                           │   │
-│  │  • Encrypted Connections (TLS 1.2+)                                       │   │
-│  │  • Credential Rotation via External Secrets Operator                      │   │
-│  └──────────────────────────────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph External["EXTERNAL ZONE"]
+        M["Mobile Apps"]
+        P["Partner Systems (B2B)"]
+        W["Payment Webhooks"]
+
+        subgraph ALB["AWS Application Load Balancer"]
+            ALB1["TLS 1.3 Termination"]
+            ALB2["WAF Integration"]
+            ALB3["DDoS Protection (Shield)"]
+        end
+
+        M --> ALB
+        P --> ALB
+        W --> ALB
+    end
+
+    subgraph DMZ["DMZ ZONE"]
+        subgraph Kong["KONG API GATEWAY"]
+            K1["OAuth 2.0 Token Introspection"]
+            K2["Rate Limiting (per-tenant, per-IP, per-endpoint)"]
+            K3["Bot Protection (device fingerprinting, CAPTCHA)"]
+            K4["mTLS for B2B Partners"]
+            K5["Security Headers (CSP, HSTS, X-Frame-Options)"]
+            K6["Correlation ID Injection"]
+        end
+    end
+
+    subgraph Internal["INTERNAL ZONE"]
+        subgraph Orch["Payment SAGA Orchestrator"]
+            O1["JWT Validation (Spring Security)"]
+            O2["Permission-Based Authorization (@PreAuthorize)"]
+            O3["Tenant Context Propagation"]
+            O4["Audit Logging (7-year retention)"]
+            O5["Idempotency Protection"]
+        end
+
+        subgraph Services["Microservices (mTLS via SPIFFE/SPIRE)"]
+            S1["Order Service<br/>• RLS Enabled<br/>• Tenant-Aware"]
+            S2["Inventory Service<br/>• RLS Enabled<br/>• Tenant-Aware"]
+            S3["Payment Gateway<br/>• Webhook Verification<br/>• IP Allowlisting"]
+        end
+
+        subgraph Data["DATA LAYER"]
+            D1["PostgreSQL with Row-Level Security (RLS)"]
+            D2["Encryption at Rest (AES-256)"]
+            D3["Encrypted Connections (TLS 1.2+)"]
+            D4["Credential Rotation via External Secrets Operator"]
+        end
+
+        Orch --> Services
+        Services --> Data
+    end
+
+    ALB -->|mTLS internal| Kong
+    Kong --> Orch
 ```
 
 ---
@@ -272,7 +265,9 @@ public class PaymentController {
 
 ### Mutual TLS (mTLS)
 
-All service-to-service communication uses mTLS with SPIFFE/SPIRE for identity management:
+All service-to-service communication uses mTLS with SPIFFE/SPIRE for identity management.
+
+> **📘 For comprehensive SPIFFE/SPIRE documentation**, including deployment guides, principal guidelines, and operational considerations, see the [SPIFFE/SPIRE Implementation Guide](SPIFFE_SPIRE_GUIDE.md).
 
 #### SPIFFE Identity Format
 
@@ -774,33 +769,33 @@ The platform implements security controls required by **SBV Circular 64/2024/TT-
 
 ### Open Banking Security Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                              OPEN BANKING ZONE                                   │
-│                                                                                  │
-│  ┌──────────────────────────────────────────────────────────────────────────┐   │
-│  │                         KONG API GATEWAY                                  │   │
-│  │  ┌────────────────────────────────────────────────────────────────────┐  │   │
-│  │  │ • TPP Certificate Validation (mTLS with SBV CA)                    │  │   │
-│  │  │ • OAuth 2.0 + PKCE (FAPI 1.0 Advanced profile)                     │  │   │
-│  │  │ • Rate Limiting (per TPP license tier)                             │  │   │
-│  │  │ • Consent Token Validation (consent_id claim)                      │  │   │
-│  │  │ • API Tier Access Control (Tier 1/2/3)                             │  │   │
-│  │  └────────────────────────────────────────────────────────────────────┘  │   │
-│  └──────────────────────────────────────────────────────────────────────────┘   │
-│                                        │                                         │
-│                                        ▼                                         │
-│  ┌──────────────────────────────────────────────────────────────────────────┐   │
-│  │                    OPEN BANKING API SERVICE                               │   │
-│  │                                                                           │   │
-│  │  ConsentValidationFilter → DataAccessAuditFilter → API Controllers       │   │
-│  │                                                                           │   │
-│  │  • Validates consent_id from JWT claim                                   │   │
-│  │  • Checks consent scope matches requested data                           │   │
-│  │  • Logs ALL data access to immutable audit table                        │   │
-│  │  • Enforces 90-day maximum consent validity                              │   │
-│  └──────────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph OBZ["OPEN BANKING ZONE"]
+        direction TB
+        subgraph Kong["KONG API GATEWAY"]
+            K1["TPP Certificate Validation (mTLS with SBV CA)"]
+            K2["OAuth 2.0 + PKCE (FAPI 1.0 Advanced profile)"]
+            K3["Rate Limiting (per TPP license tier)"]
+            K4["Consent Token Validation (consent_id claim)"]
+            K5["API Tier Access Control (Tier 1/2/3)"]
+        end
+
+        subgraph API["OPEN BANKING API SERVICE"]
+            direction LR
+            F1["ConsentValidationFilter"] --> F2["DataAccessAuditFilter"] --> F3["API Controllers"]
+        end
+
+        subgraph Features["Service Features"]
+            A1["Validates consent_id from JWT claim"]
+            A2["Checks consent scope matches requested data"]
+            A3["Logs ALL data access to immutable audit table"]
+            A4["Enforces 90-day maximum consent validity"]
+        end
+
+        Kong --> API
+        API --> Features
+    end
 ```
 
 ### Third-Party Provider (TPP) Authentication

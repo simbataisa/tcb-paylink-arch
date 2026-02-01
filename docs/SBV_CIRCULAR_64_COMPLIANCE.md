@@ -78,11 +78,11 @@ All bank APIs must be documented using OpenAPI 3.0 specification:
 |-------------|-----------------|---------------|--------------|
 | **OpenAPI 3.0** | Mandatory documentation | 46% coverage | MEDIUM |
 | **Security Scheme** | OAuth 2.0 documented | No @SecurityScheme | LOW |
-| **Consent Management** | Granular, revocable | **ABSENT** | **CRITICAL** |
-| **Audit Logging** | All API access tracked | Workflow only | HIGH |
-| **TPP Registration** | Provider management | **ABSENT** | **CRITICAL** |
-| **ISO 20022** | pain.001/pain.002 | Custom JSON | MEDIUM |
-| **API Tiering** | Tier 1/2/3 classification | No tiering | MEDIUM |
+| **Consent Management** | Granular, revocable | ✅ Implemented (`open-banking-api/consent/`) | CLOSED |
+| **Audit Logging** | All API access tracked | ✅ Implemented (`open-banking-api/audit/`) | CLOSED |
+| **TPP Registration** | Provider management | ✅ Implemented (`open-banking-api/tpp/`) | CLOSED |
+| **ISO 20022** | pain.001/pain.002 | ✅ Implemented (`open-banking-api/iso20022/`) | CLOSED |
+| **API Tiering** | Tier 1/2/3 classification | ✅ Implemented (Tier 1/2/3 controllers) | CLOSED |
 | **SCA/FAPI** | Strong Customer Auth | 3DSecure only | MEDIUM |
 
 ---
@@ -118,29 +118,28 @@ open-banking-api/
 
 ### Security Flow
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        OPEN BANKING ZONE                             │
-│                                                                      │
-│  ┌────────────────────────────────────────────────────────────────┐ │
-│  │                    KONG API GATEWAY                             │ │
-│  │  • TPP Certificate Validation (mTLS with SBV CA)                │ │
-│  │  • OAuth 2.0 + PKCE (FAPI 1.0 profile)                         │ │
-│  │  • Rate Limiting per TPP license                               │ │
-│  │  • Consent Token Validation (consent_id claim)                 │ │
-│  └────────────────────────────────────────────────────────────────┘ │
-│                               │                                      │
-│                               ▼                                      │
-│  ┌────────────────────────────────────────────────────────────────┐ │
-│  │               OPEN BANKING API SERVICE                          │ │
-│  │                                                                  │ │
-│  │  ConsentValidationFilter → DataAccessAuditFilter → Controllers  │ │
-│  │                                                                  │ │
-│  │  • Validates consent_id from JWT                                │ │
-│  │  • Checks consent scope matches requested data                  │ │
-│  │  • Logs all data access to audit table                         │ │
-│  └────────────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph OBZ["OPEN BANKING ZONE"]
+        direction TB
+        subgraph Kong["KONG API GATEWAY"]
+            K1["TPP Certificate Validation (mTLS with SBV CA)"]
+            K2["OAuth 2.0 + PKCE (FAPI 1.0 profile)"]
+            K3["Rate Limiting per TPP license"]
+            K4["Consent Token Validation (consent_id claim)"]
+        end
+
+        subgraph API["OPEN BANKING API SERVICE"]
+            direction LR
+            F1["ConsentValidationFilter"] --> F2["DataAccessAuditFilter"] --> F3["Controllers"]
+
+            A1["Validates consent_id from JWT"]
+            A2["Checks consent scope matches requested data"]
+            A3["Logs all data access to audit table"]
+        end
+
+        Kong --> API
+    end
 ```
 
 ---
@@ -320,27 +319,27 @@ CREATE TRIGGER audit_immutable
 - [ ] API catalog submitted to SBV
 
 ### Consent Management
-- [ ] Consent APIs: create, read, revoke functional
-- [ ] Consent expiry enforced (max 90 days per SBV)
+- [x] Consent APIs: create, read, revoke functional (`ConsentController`)
+- [x] Consent expiry enforced (max 90 days per SBV) (`ConsentEntity.validUntil`)
 - [ ] Customer consent portal accessible
-- [ ] Consent scope validation on API access
+- [x] Consent scope validation on API access (`ConsentValidationFilter`)
 
 ### TPP Management
-- [ ] TPP registration requires SBV license number
-- [ ] TPP certificate validation implemented
-- [ ] API tier restrictions enforced
-- [ ] Credential rotation supported
+- [x] TPP registration requires SBV license number (`TppController.registerTpp()`)
+- [x] TPP certificate validation implemented (Kong mTLS plugin)
+- [x] API tier restrictions enforced (`TppApiAccessEntity`)
+- [x] Credential rotation supported (`TppRegistrationService.rotateCredentials()`)
 
 ### Audit & Compliance
-- [ ] Data access audit captures all required fields
-- [ ] Audit records immutable (no UPDATE/DELETE)
-- [ ] SBV reporting API functional
-- [ ] 7-year audit retention
+- [x] Data access audit captures all required fields (`DataAccessAuditEntity`)
+- [x] Audit records immutable (no UPDATE/DELETE) (DB trigger)
+- [x] SBV reporting API functional (`DataAccessAuditService.getAuditLogForPeriod()`)
+- [ ] 7-year audit retention (requires partitioning setup)
 
 ### Security
 - [ ] OAuth 2.0 + PKCE for all external APIs
 - [ ] Strong Customer Authentication for Tier 3
-- [ ] mTLS for TPP communication
+- [x] mTLS for TPP communication (Kong mTLS plugin)
 - [ ] FAPI 1.0 security profile
 
 ---
