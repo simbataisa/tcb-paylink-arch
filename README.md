@@ -506,43 +506,64 @@ flowchart TB
 - Webhook consumer uses `WebhookIdempotencyService` to track processed events
 - Payment gateway receives idempotency key with every request
 
-### Principle 4: Transactional Outbox Pattern
+### Principle 4: Transactional Outbox Pattern (CDC)
 
-Events are published reliably without distributed transactions:
+Events are published reliably using Change Data Capture (CDC) with Debezium:
 
 ```mermaid
 sequenceDiagram
     participant App as Application
-    participant DB as Database
-    participant Poller as Outbox Poller
+    participant DB as PostgreSQL
+    participant WAL as Write-Ahead Log
+    participant Deb as Debezium Connector
+    participant SMT as EventRouter SMT
     participant Kafka as Kafka
 
     Note over App,DB: Step 1: Atomic Write (Single Transaction)
     App->>DB: BEGIN TRANSACTION
     App->>DB: UPDATE orders SET status = 'COMPLETED'
-    App->>DB: INSERT INTO outbox_events (event_type, payload, status)
+    App->>DB: INSERT INTO outbox_events (event_type, payload)
     App->>DB: COMMIT
 
-    Note over Poller,DB: Step 2: Poller Publishes to Kafka
-    Poller->>DB: SELECT * FROM outbox_events<br/>WHERE status = 'PENDING'<br/>FOR UPDATE SKIP LOCKED<br/>LIMIT 100
-    DB-->>Poller: Pending events
-    Poller->>Kafka: Publish events
+    Note over DB,WAL: Step 2: WAL Capture (< 1ms)
+    DB->>WAL: Write WAL entry
 
-    Note over Poller,DB: Step 3: Mark Published
-    Poller->>DB: UPDATE outbox_events<br/>SET status = 'PUBLISHED'
+    Note over WAL,Deb: Step 3: CDC Streaming (< 10ms)
+    Deb->>WAL: Read logical replication slot
+    Deb->>Deb: Deserialize change event
+
+    Note over Deb,SMT: Step 4: Event Transformation
+    Deb->>SMT: Raw change event
+    SMT->>SMT: Extract payload, route by topic field
+
+    Note over SMT,Kafka: Step 5: Kafka Publishing
+    SMT->>Kafka: Produce to routed topic
 ```
 
 **Guarantees:**
 
 - No dual-write problem (event ↔ business data consistency)
-- At-least-once delivery
-- Ordering preserved per partition key
+- Ultra-low latency (< 10ms from commit to Kafka)
+- Exactly-once semantics with Debezium + Kafka transactions
+- WAL-based ordering (guaranteed event order)
+- Automatic recovery (connector resumes from last offset)
 
 **Implementation in this codebase:**
 
-- `OutboxPoller` polls `outbox_events` table every 100ms
-- `WebhookKafkaOutboxPoller` handles webhook events similarly
-- Both use `FOR UPDATE SKIP LOCKED` for concurrent processing
+- `OutboxPublisher` writes events to `outbox_events` table within business transactions
+- Debezium PostgreSQL Connector captures INSERT via logical replication
+- EventRouter SMT routes events to correct Kafka topics based on `topic` field
+- `OutboxCdcCleanupJob` removes captured events hourly (1-hour retention)
+- Legacy polling classes (`OutboxPoller`, `WebhookKafkaOutboxPoller`) are deprecated but available for rollback
+
+**Deployment Modes:**
+
+| Mode | Latency | Use Case |
+|------|---------|----------|
+| `cdc` (default) | < 10ms | Production - ultra-low latency |
+| `polling` | 50-100ms | Development/testing, no Kafka Connect |
+
+See `docs/CDC_OUTBOX_ARCHITECTURE.md` for detailed CDC documentation.
 
 ### Principle 5: Event-Driven Communication
 
@@ -2408,6 +2429,9 @@ kubectl logs -l app=kong -n kong
 - [Temporal vs Kafka Integration](docs/temporal-kafka-integration.md) - When to use each and how they complement each other
 - [Anti-Pattern Deep Dive](docs/anti-pattern-deep-dive.md) - Temporal workflow state best practices
 - [Hybrid SAGA Pattern Guide](docs/pattern1-comprehensive-guide.md) - Temporal + Spring State Machine pattern
+- [Tech Stack Rationale](docs/TECH_STACK_RATIONALE.md) - Technology selection decisions and scalability architecture (500 → 10K+ TPS)
+- [Database Selection Guide](docs/DATABASE_SELECTION_GUIDE.md) - When to use PostgreSQL, Aurora, DynamoDB, ScyllaDB, CockroachDB, TigerBeetle
+- [CDC Outbox Architecture](docs/CDC_OUTBOX_ARCHITECTURE.md) - Debezium CDC for reliable event publishing with exactly-once semantics
 
 ### Security
 
