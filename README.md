@@ -565,6 +565,302 @@ sequenceDiagram
 
 See `docs/CDC_OUTBOX_ARCHITECTURE.md` for detailed CDC documentation.
 
+#### Use Cases
+
+| Use Case | Service | Outbox Table | Kafka Topic | Status |
+|----------|---------|--------------|-------------|--------|
+| Domain events (payment lifecycle) | Orchestrator | `outbox_events` | `payment.*` | ✅ Implemented |
+| Inbound webhook relay | Payment Gateway | `webhook_kafka_outbox` | `webhook.payment.events` | ✅ Implemented |
+| Outbound webhook delivery | Payment Gateway | `webhook_outbox` | N/A (HTTP) | ✅ Implemented |
+| Order lifecycle events | Order Service | `order_outbox` | `order.*` | 📋 Recommended |
+| Inventory stock events | Inventory Service | `inventory_outbox` | `inventory.*` | 📋 Recommended |
+| Open Banking TPP notifications | Open Banking | `tpp_notification_outbox` | N/A (HTTP) | 📋 Recommended |
+
+#### When to Apply the Outbox Pattern
+
+**✅ APPLY when:**
+
+- Business transaction + event publication must be atomic (no dual-write problem)
+- External system may be temporarily unavailable
+- Event ordering matters (same aggregate/partition key)
+- Audit trail of published events is required
+- Cross-service communication needs reliability guarantees
+- Regulatory compliance requires provable delivery (Open Banking, PCI-DSS)
+
+**❌ AVOID when:**
+
+- Fire-and-forget metrics/logs (use direct Kafka producer)
+- Same-service internal method calls
+- Read-only query operations
+- Ultra-low latency < 5ms required (CDC adds ~10ms)
+- Simple synchronous request-response patterns (use REST/gRPC)
+
+#### Downstream Applications (Payment Networks & Channels)
+
+The outbox pattern is essential for reliable communication with external payment networks:
+
+```mermaid
+flowchart TB
+    subgraph Platform["Payment Platform"]
+        PS["Payment Service"]
+        OB["Outbox Table"]
+        CDC["Debezium CDC"]
+    end
+
+    subgraph Downstream["Downstream: External Networks"]
+        subgraph Merchants["Merchant Notifications"]
+            MW["Merchant Webhooks"]
+            MPP["Partner Portals"]
+        end
+        subgraph Networks["Payment Networks"]
+            NAPAS["NAPAS<br/>ISO 20022"]
+            CARDS["Card Networks<br/>Visa/MC"]
+            SWIFT["SWIFT<br/>Cross-border"]
+        end
+        subgraph OpenBanking["Open Banking"]
+            TPP["TPP Webhooks"]
+            AISP["AISP Updates"]
+            PISP["PISP Callbacks"]
+        end
+    end
+
+    PS -->|"1. Business TX + Event"| OB
+    OB -->|"2. CDC Capture"| CDC
+    CDC -->|"3a. webhook.merchant.events"| MW
+    CDC -->|"3b. payment.settlement.events"| NAPAS
+    CDC -->|"3c. openbanking.notification.events"| TPP
+    MW --> MPP
+    NAPAS --> CARDS
+    NAPAS --> SWIFT
+    TPP --> AISP
+    TPP --> PISP
+```
+
+**1. Outbound Webhook Delivery (✅ Implemented)**
+
+Notifies merchants when payments complete, fail, or require action:
+
+```
+Payment TX + webhook_outbox INSERT (atomic)
+    → OutboundWebhookService polls/CDC
+    → HTTP POST to merchant endpoint
+    → Exponential backoff for transient failures
+    → DLQ for permanent failures
+```
+
+- Table: `webhook_outbox` with `status`, `retry_count`, `next_retry_at`
+- Retry policy: 5 attempts with exponential backoff (1s → 30s)
+- Idempotency: Merchants receive `X-Idempotency-Key` header
+
+**2. Payment Network Integration (📋 Recommended)**
+
+For integrating with local and international payment networks:
+
+```
+NAPAS (Vietnam domestic):
+    Payment TX + outbox INSERT
+    → CDC → Kafka → NAPAS Adapter
+    → ISO 20022 pain.001 (Credit Transfer)
+    → pain.002 (Status Report) → Webhook → Orchestrator
+
+Card Networks:
+    Authorization TX + outbox INSERT
+    → CDC → Kafka → Settlement Batch Builder
+    → TC105 file to Visa/Mastercard
+```
+
+**3. Open Banking TPP Notifications (📋 Recommended)**
+
+SBV Circular 64 requires reliable notification to Third Party Providers:
+
+```
+Consent granted/revoked:
+    Consent TX + tpp_notification_outbox INSERT
+    → CDC → TPP webhook endpoint
+    → Retry until acknowledged or expired
+
+Payment status updates:
+    Payment state change + outbox INSERT
+    → CDC → PISP callback URL
+    → Include payment status, timestamps, reference
+```
+
+#### Upstream Applications (Product Channels)
+
+Product channels use the outbox pattern to reliably communicate with the payment platform:
+
+```mermaid
+flowchart TB
+    subgraph Upstream["Upstream: Product Channels"]
+        subgraph Ecommerce["E-Commerce"]
+            WEB["Web Checkout"]
+            MOBILE["Mobile App"]
+        end
+        subgraph POS["Point of Sale"]
+            TERMINAL["POS Terminal"]
+            MPOS["mPOS Device"]
+        end
+        subgraph Wallets["Digital Wallets"]
+            EWALLET["E-Wallet"]
+            QRPAY["QR Payment"]
+        end
+    end
+
+    subgraph ChannelServices["Channel Services"]
+        OS["Order Service"]
+        IS["Inventory Service"]
+        OOS["Order Outbox"]
+        IOS["Inventory Outbox"]
+    end
+
+    subgraph Platform["Payment Platform"]
+        KAFKA["Kafka"]
+        ORCH["Orchestrator"]
+    end
+
+    WEB --> OS
+    MOBILE --> OS
+    TERMINAL --> OS
+    MPOS --> OS
+    EWALLET --> OS
+    QRPAY --> OS
+
+    OS -->|"Order TX"| OOS
+    IS -->|"Stock TX"| IOS
+    OOS -->|"CDC"| KAFKA
+    IOS -->|"CDC"| KAFKA
+    KAFKA -->|"order.created"| ORCH
+    KAFKA -->|"inventory.reserved"| ORCH
+```
+
+**1. Order Service Event Publishing (📋 Recommended)**
+
+Current implementation uses synchronous Feign calls. Enhanced pattern:
+
+```
+Current (synchronous):
+    Orchestrator → Feign → Order Service
+    ⚠️ Orchestrator blocked if Order Service slow/down
+
+Enhanced (event-driven):
+    Order Service: Order TX + order_outbox INSERT
+    → CDC → Kafka (order.created, order.validated, order.cancelled)
+    → Orchestrator consumes events
+    ✅ Order Service doesn't block on Orchestrator availability
+```
+
+Benefits:
+- Order Service remains responsive during payment processing
+- Temporal workflow receives events asynchronously
+- Natural retry via Kafka consumer offset management
+
+**2. Inventory Service Event Publishing (📋 Recommended)**
+
+```
+Inventory TX + inventory_outbox INSERT (atomic)
+    → CDC → Kafka (inventory.reserved, inventory.released, inventory.depleted)
+    → Multiple consumers: Orchestrator, Analytics, Alerting
+```
+
+Benefits:
+- Real-time inventory dashboards without polling
+- Automatic stock alerts when inventory low
+- Decoupled from payment timing
+
+**3. Multi-Channel Product Architecture**
+
+All product channels converge through the same event-driven pattern:
+
+| Channel | Entry Point | Outbox Event | Kafka Topic |
+|---------|-------------|--------------|-------------|
+| E-commerce Web | Order API | `OrderCreated` | `order.created` |
+| Mobile App | Order API | `OrderCreated` | `order.created` |
+| POS Terminal | POS Gateway | `TransactionInitiated` | `pos.transaction.initiated` |
+| QR Payment | QR Gateway | `PaymentRequested` | `qr.payment.requested` |
+| E-Wallet | Wallet API | `WalletPaymentRequested` | `wallet.payment.requested` |
+
+The Orchestrator can subscribe to all channel topics and route to appropriate workflows.
+
+#### Complete Outbox Architecture
+
+```mermaid
+flowchart TB
+    subgraph Upstream["UPSTREAM: Product Channels"]
+        direction TB
+        EC["E-Commerce"]
+        POS["POS"]
+        WALLET["Wallets"]
+    end
+
+    subgraph Services["MICROSERVICES"]
+        direction TB
+        subgraph OrderSvc["Order Service"]
+            O_APP["Application"]
+            O_OUT["order_outbox"]
+        end
+        subgraph InvSvc["Inventory Service"]
+            I_APP["Application"]
+            I_OUT["inventory_outbox"]
+        end
+        subgraph PaySvc["Payment Gateway"]
+            P_APP["Application"]
+            P_IN["webhook_kafka_outbox<br/>(inbound)"]
+            P_OUT["webhook_outbox<br/>(outbound)"]
+        end
+        subgraph OrcSvc["Orchestrator"]
+            ORC_APP["Workflow"]
+            ORC_OUT["outbox_events"]
+        end
+    end
+
+    subgraph Messaging["EVENT BACKBONE"]
+        KAFKA["Apache Kafka"]
+    end
+
+    subgraph Downstream["DOWNSTREAM: External Systems"]
+        direction TB
+        MERCHANT["Merchants"]
+        NAPAS["NAPAS"]
+        TPP["TPPs"]
+    end
+
+    EC --> O_APP
+    POS --> O_APP
+    WALLET --> O_APP
+
+    O_APP --> O_OUT
+    I_APP --> I_OUT
+    P_APP --> P_IN
+    P_APP --> P_OUT
+    ORC_APP --> ORC_OUT
+
+    O_OUT -->|CDC| KAFKA
+    I_OUT -->|CDC| KAFKA
+    P_IN -->|CDC| KAFKA
+    ORC_OUT -->|CDC| KAFKA
+
+    KAFKA --> ORC_APP
+
+    P_OUT -->|HTTP| MERCHANT
+    ORC_OUT -->|CDC → Adapter| NAPAS
+    ORC_OUT -->|CDC → Adapter| TPP
+
+    style Upstream fill:#e1f5fe
+    style Downstream fill:#fff3e0
+    style Messaging fill:#f3e5f5
+```
+
+**Data Flow Summary:**
+
+| Direction | Source | Outbox | Destination | Pattern |
+|-----------|--------|--------|-------------|---------|
+| ↓ Upstream | Order Service | `order_outbox` | Orchestrator | CDC → Kafka → Consumer |
+| ↓ Upstream | Inventory Service | `inventory_outbox` | Orchestrator | CDC → Kafka → Consumer |
+| → Internal | Orchestrator | `outbox_events` | All Services | CDC → Kafka → Consumers |
+| ← Inbound | Payment Networks | `webhook_kafka_outbox` | Orchestrator | CDC → Kafka → Consumer |
+| ↓ Outbound | Payment Gateway | `webhook_outbox` | Merchants | Polling → HTTP |
+| ↓ Outbound | Orchestrator | `outbox_events` | NAPAS/TPPs | CDC → Kafka → Adapters |
+
 ### Principle 5: Event-Driven Communication
 
 Domain events flow through Kafka for loose coupling:
