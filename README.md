@@ -31,47 +31,57 @@ Enterprise-grade payment processing platform using **Temporal + Spring State Mac
 
 ```mermaid
 flowchart TB
-    subgraph External["External Layer"]
+    subgraph NorthSouth["NORTH-SOUTH TRAFFIC (Kong Gateway)"]
         Client["Client (REST API)"]
-        Kong["Kong Gateway"]
-        Zipkin["Zipkin (Tracing)"]
-        Temporal["Temporal Server"]
+        Kong["Kong Gateway<br/>• JWT/API Key Auth<br/>• Rate Limiting<br/>• Security Headers<br/>• Correlation ID"]
     end
 
-    subgraph Orchestrator["PAYMENT-SAGA-ORCHESTRATOR :9090"]
-        REST["REST Controller<br/>/api/v1/payments"]
-        Workflow["PaymentSagaWorkflow<br/>(Temporal)"]
-        StateMachine["Spring State Machine"]
-        KafkaPub["Kafka Publisher"]
-        Activities["Activities<br/>(Feign Clients)"]
-        Outbox["Outbox Table<br/>(PostgreSQL)"]
+    subgraph EastWest["EAST-WEST TRAFFIC (Istio Service Mesh · mTLS STRICT)"]
+        subgraph Orchestrator["PAYMENT-SAGA-ORCHESTRATOR :9090"]
+            REST["REST Controller<br/>/api/v1/payments"]
+            Workflow["PaymentSagaWorkflow<br/>(Temporal)"]
+            StateMachine["Spring State Machine"]
+            KafkaPub["Kafka Publisher"]
+            Activities["Activities<br/>(Feign Clients)"]
+            Outbox["Outbox Table<br/>(PostgreSQL)"]
+        end
+
+        subgraph Services["Microservices"]
+            Order["ORDER-SERVICE :8081<br/>• Create Order<br/>• Validate<br/>• Update Status"]
+            Inventory["INVENTORY-SERVICE :8082<br/>• Check Stock<br/>• Reserve<br/>• Release"]
+            Payment["PAYMENT-GATEWAY :8083<br/>• Authorize<br/>• Capture<br/>• Refund<br/>• Webhooks"]
+        end
     end
 
-    subgraph Services["Microservices"]
-        Order["ORDER-SERVICE :8081<br/>• Create Order<br/>• Validate<br/>• Update Status"]
-        Inventory["INVENTORY-SERVICE :8082<br/>• Check Stock<br/>• Reserve<br/>• Release"]
-        Payment["PAYMENT-GATEWAY :8083<br/>• Authorize<br/>• Capture<br/>• Refund<br/>• Webhooks"]
+    subgraph Infra["Infrastructure"]
         Kafka["KAFKA :9092<br/>• Domain Events<br/>• Webhook Events<br/>• DLT Topics"]
+        Temporal["Temporal Server"]
+        Zipkin["Zipkin (Tracing)"]
     end
 
     subgraph Databases["Databases"]
         OrderDB[(order_db :5432)]
         InventoryDB[(inventory_db :5434)]
         PaymentDB[(payment_db :5435)]
+        SagaDB[(saga_db :5436)]
     end
 
-    Client --> Kong --> REST
+    Client --> Kong
+    Kong -->|north-south| REST
     REST --> Workflow --> StateMachine --> KafkaPub
     Workflow --> Activities
     KafkaPub --> Outbox
-    Activities --> Order & Inventory & Payment
+    Activities -->|east-west<br/>mTLS + AuthzPolicy| Order & Inventory & Payment
     Outbox --> Kafka
     Order --> OrderDB
     Inventory --> InventoryDB
     Payment --> PaymentDB
+    Orchestrator --> SagaDB
     Orchestrator -.-> Zipkin
     Orchestrator -.-> Temporal
 ```
+
+**Traffic separation by design:** External clients reach services through Kong (north-south), while internal service-to-service calls route directly through the Istio mesh via Feign + K8s DNS (east-west). Kong is never in the path of internal calls — see [Principle 21: Layered Gateway Architecture](#principle-21-layered-gateway-architecture) for the full rationale and industry references.
 
 ## Core Technology Stack
 
@@ -1617,12 +1627,61 @@ flowchart TB
 - **No direct cross-domain calls**: Order cannot call Inventory directly (prevents tight coupling)
 - **Orchestrator as hub**: Only the orchestrator coordinates saga steps
 
+**Why Internal Calls Do NOT Route Through the API Gateway:**
+
+This architecture intentionally separates **north-south** (external) and **east-west** (internal) traffic management, following industry best practices. Internal service-to-service calls go directly through the Istio mesh, bypassing Kong entirely.
+
+```
+External (North-South)                    Internal (East-West)
+
+Client → Kong → Istio Ingress → Svc      Orchestrator → Envoy → K8s DNS → Envoy → Svc
+         │                                               │                  │
+         ├─ JWT/API Key auth                             ├─ mTLS encrypt    ├─ mTLS decrypt
+         ├─ Rate limiting                                ├─ AuthzPolicy     ├─ AuthzPolicy
+         └─ Security headers                             └─ Circuit break   └─ Route to pod
+```
+
+| Concern | Why NOT route internal calls through Kong |
+| --- | --- |
+| **Performance** | Extra network hop per call; orchestrator makes 4-6 calls per saga — latency compounds |
+| **Single point of failure** | Kong outage would block ALL communication including compensation flows |
+| **Misaligned concerns** | JWT/API Key auth is irrelevant for trusted internal calls already authenticated by Istio mTLS workload identity |
+| **Tight coupling** | All services become dependent on Kong availability; service contracts get mixed with client-facing API contracts |
+
+**Industry Reference Architectures:**
+
+| Organization | External Traffic | Internal Traffic | Internal Gateway? |
+| --- | --- | --- | --- |
+| Netflix (100B+ req/day) | Zuul API Gateway (80+ clusters) | Istio + Envoy service mesh | No |
+| Uber (4,000+ services) | Custom API Gateway | Custom mesh with Envoy | No |
+| Stripe | API Gateway at edge | Service mesh with mTLS | No |
+
+**Industry Guidance:**
+
+- **[Microsoft Azure Architecture Center](https://learn.microsoft.com/en-us/azure/architecture/microservices/design/gateway)** — API gateway guidance focuses exclusively on client-to-service communication; no recommendation for internal gateway routing
+- **[Christian Posta (Solo.io/Istio)](https://blog.christianposta.com/microservices/do-i-need-an-api-gateway-if-i-have-a-service-mesh/)** — "You need both. The service mesh handles internal resilience; the API gateway handles boundary concerns. They solve quite different problems."
+- **[Kong (our gateway vendor)](https://konghq.com/blog/enterprise/api-gateway-service-mesh-and-zero-trust)** — Recommends a trust delegation model: enterprise gateway authenticates externally, mesh handles internal communication directly
+- **[ByteByteGo](https://blog.bytebytego.com/p/api-gateways-101-the-core-of-modern)** — "While the same gateway could be used for inter-service requests, it would not be recommended since it would increase the load on the same gateway instance."
+
+**When Internal Gateway Routing IS Justified (niche cases):**
+
+| Use Case | Better Alternative Used Here |
+| --- | --- |
+| Multi-tenant internal rate limiting | Istio RBAC + DestinationRules |
+| Legacy protocol translation | Envoy sidecar filters |
+| Cross-cluster communication | Istio multi-cluster mesh |
+| Regulatory audit logging | Istio access logs + Envoy audit filters |
+
+If an internal gateway is ever needed, deploy a **separate, dedicated internal gateway instance** — never share the edge gateway.
+
 **Implementation in this codebase:**
 
-- `k8s/base/kong/` - Kong ingress routes and plugins
-- `k8s/base/istio/peer-authentication.yaml` - mTLS STRICT mode
-- `k8s/base/istio/authorization-policies.yaml` - Service access control
-- `k8s/base/istio/destination-rules.yaml` - Traffic policies
+- `k8s/base/kong/` - Kong ingress routes and plugins (external traffic only)
+- `k8s/base/istio/peer-authentication.yaml` - mTLS STRICT mode (internal encryption)
+- `k8s/base/istio/authorization-policies.yaml` - Service access control (zero-trust east-west)
+- `k8s/base/istio/destination-rules.yaml` - Traffic policies, circuit breaking
+- `k8s/base/istio/virtual-services.yaml` - Routing, retries, timeouts
+- `payment-saga-orchestrator/.../client/*Client.java` - Feign clients with direct K8s DNS resolution
 - [API_GATEWAY_ARCHITECTURE.md](docs/API_GATEWAY_ARCHITECTURE.md) - Detailed architecture documentation
 
 ### Architecture Validation
