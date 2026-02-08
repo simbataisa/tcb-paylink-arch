@@ -1,0 +1,3059 @@
+openapi: 3.0.3
+info:
+  title: Payment SAGA Platform API
+  description: |
+    Distributed payment processing platform using a hybrid Temporal + Spring State Machine
+    SAGA pattern. Includes core payment orchestration, order/inventory/payment gateway
+    microservices, and SBV Circular 64-compliant Open Banking APIs.
+  version: 1.0.0
+  contact:
+    name: Payment Platform Team
+    email: payment-platform@company.com
+
+servers:
+  - url: http://localhost:9090
+    description: Payment SAGA Orchestrator
+  - url: http://localhost:8081
+    description: Order Service
+  - url: http://localhost:8082
+    description: Inventory Service
+  - url: http://localhost:8083
+    description: Payment Gateway Service
+  - url: http://localhost:8084
+    description: Open Banking API
+
+tags:
+  - name: Payment SAGA
+    description: Payment workflow orchestration operations
+  - name: Audit Trail
+    description: Audit trail and compliance reporting endpoints
+  - name: Reconciliation
+    description: Event reconciliation and reporting APIs
+  - name: Orders
+    description: Order management operations
+  - name: Inventory
+    description: Inventory reservation management
+  - name: Payment Gateway
+    description: Payment authorization and capture operations
+  - name: Webhooks
+    description: External payment provider webhook ingestion
+  - name: Consent Management
+    description: Customer consent management for Open Banking
+  - name: TPP Registration
+    description: Third Party Provider registration and management
+  - name: Account Information
+    description: "Tier 1 & 2: Account Information APIs"
+  - name: Payment Initiation
+    description: "Tier 3: Payment Initiation Services (PIS)"
+  - name: NAPAS Integration
+    description: "Internal: ISO 20022 NAPAS Integration"
+  - name: Kong Audit
+    description: "Internal: Kong Gateway Audit Logs"
+
+paths:
+  # ==================== PAYMENT SAGA (Orchestrator :9090) ====================
+
+  /api/v1/payments:
+    post:
+      tags: [Payment SAGA]
+      operationId: processPayment
+      summary: Initiate a payment SAGA workflow
+      description: |
+        Creates a new Temporal workflow that orchestrates the full payment lifecycle:
+        order validation → inventory reservation → payment authorization → capture → completion.
+        Returns immediately with a workflow ID for status polling.
+      security:
+        - bearerAuth: [payment:create]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderRequest'
+            example:
+              orderId: "ORD-001"
+              customerId: "CUST-001"
+              amount: 100.00
+              currency: "USD"
+              items:
+                - sku: "PROD-001"
+                  name: "Product"
+                  quantity: 1
+                  price: 100.00
+              paymentDetails:
+                paymentMethod: "CREDIT_CARD"
+                amount: 100.00
+                currency: "USD"
+      responses:
+        '202':
+          description: Payment workflow initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResult'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden - insufficient permissions
+
+  /api/v1/payments/{workflowId}:
+    get:
+      tags: [Payment SAGA]
+      operationId: getPaymentStatus
+      summary: Get payment workflow status
+      description: Returns the current workflow state, business state, and compensation stack size.
+      security:
+        - bearerAuth: [payment:read]
+      parameters:
+        - name: workflowId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Temporal workflow ID
+      responses:
+        '200':
+          description: Payment status retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  workflowId:
+                    type: string
+                  workflowState:
+                    $ref: '#/components/schemas/WorkflowState'
+                  businessState:
+                    $ref: '#/components/schemas/PaymentState'
+                  compensationStackSize:
+                    type: integer
+                  isTerminal:
+                    type: boolean
+        '404':
+          description: Workflow not found
+
+  /api/v1/payments/{workflowId}/result:
+    get:
+      tags: [Payment SAGA]
+      operationId: getPaymentResult
+      summary: Get payment result (blocking)
+      description: |
+        Blocks until the workflow reaches a terminal state, then returns the full result.
+        Use for synchronous payment flows.
+      security:
+        - bearerAuth: [payment:read]
+      parameters:
+        - name: workflowId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Payment result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResult'
+        '404':
+          description: Workflow not found
+
+  /api/v1/payments/{workflowId}/cancel:
+    post:
+      tags: [Payment SAGA]
+      operationId: cancelPayment
+      summary: Cancel a running payment workflow
+      description: Signals the Temporal workflow to initiate compensation and rollback.
+      security:
+        - bearerAuth: [payment:cancel]
+      parameters:
+        - name: workflowId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  description: Cancellation reason
+      responses:
+        '200':
+          description: Cancellation requested
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  workflowId:
+                    type: string
+                  status:
+                    type: string
+                  reason:
+                    type: string
+        '404':
+          description: Workflow not found
+
+  /api/v1/payments/health:
+    get:
+      tags: [Payment SAGA]
+      operationId: paymentHealth
+      summary: Payment service health check
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: UP
+                  service:
+                    type: string
+                    example: payment-saga-orchestrator
+
+  # ==================== AUDIT TRAIL (Orchestrator :9090) ====================
+
+  /api/v1/audit/{sagaId}:
+    get:
+      tags: [Audit Trail]
+      operationId: getAuditTrail
+      summary: Get audit trail by SAGA ID
+      description: Returns all audit records for a specific SAGA workflow execution.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sagaId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Audit trail retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditTrailResponse'
+        '404':
+          description: SAGA not found
+
+  /api/v1/audit/search:
+    get:
+      tags: [Audit Trail]
+      operationId: searchAudit
+      summary: Search audit records
+      description: Search audit records with filtering by SAGA ID, event type, and date range.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sagaId
+          in: query
+          schema:
+            type: string
+        - name: event
+          in: query
+          schema:
+            type: string
+        - name: fromDate
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+          description: Start date (yyyy-MM-dd)
+        - name: toDate
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+          description: End date (yyyy-MM-dd)
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 100
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditSearchResponse'
+
+  /api/v1/audit/export:
+    get:
+      tags: [Audit Trail]
+      operationId: exportAudit
+      summary: Export audit records
+      description: Export audit records as CSV or JSON file for compliance reporting.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: fromDate
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: toDate
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [csv, json]
+            default: csv
+        - name: sagaId
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Exported file
+          content:
+            text/csv:
+              schema:
+                type: string
+            application/json:
+              schema:
+                type: string
+
+  /api/v1/audit/archival/status:
+    get:
+      tags: [Audit Trail]
+      operationId: getArchivalStatus
+      summary: Get archival status
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Archival status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArchivalStatusResponse'
+
+  /api/v1/audit/archival/trigger:
+    post:
+      tags: [Audit Trail]
+      operationId: triggerArchival
+      summary: Trigger manual archival of old audit records
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Archival triggered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArchivalResultResponse'
+
+  # ==================== RECONCILIATION (Orchestrator :9090) ====================
+
+  /api/v1/reconciliation/summary:
+    get:
+      tags: [Reconciliation]
+      operationId: getReconciliationSummary
+      summary: Get reconciliation summary
+      description: Returns aggregated reconciliation metrics for the specified time period.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Period start (ISO-8601)
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Period end (ISO-8601)
+      responses:
+        '200':
+          description: Summary retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconciliationSummaryDto'
+
+  /api/v1/reconciliation/latency-report:
+    get:
+      tags: [Reconciliation]
+      operationId: getLatencyReport
+      summary: Get latency report with percentiles
+      description: Returns end-to-end latency percentiles and per-stage breakdown.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: slaThresholdMs
+          in: query
+          schema:
+            type: integer
+            format: int64
+          description: SLA threshold in milliseconds for compliance calculation
+      responses:
+        '200':
+          description: Latency report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LatencyReportDto'
+
+  /api/v1/reconciliation/events/{eventId}:
+    get:
+      tags: [Reconciliation]
+      operationId: getEventTimeline
+      summary: Get event timeline
+      description: Returns the full lifecycle timeline of a single event across all stages.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Event timeline
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventTimelineDto'
+        '404':
+          description: Event not found
+
+  /api/v1/reconciliation/discrepancies:
+    get:
+      tags: [Reconciliation]
+      operationId: getDiscrepancies
+      summary: List discrepancies
+      description: Returns paginated list of reconciliation discrepancies.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: unresolvedOnly
+          in: query
+          schema:
+            type: boolean
+            default: false
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Discrepancies page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PageDiscrepancyDto'
+
+  /api/v1/reconciliation/discrepancies/{eventId}/resolve:
+    post:
+      tags: [Reconciliation]
+      operationId: resolveDiscrepancy
+      summary: Resolve a discrepancy
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveDiscrepancyRequest'
+      responses:
+        '200':
+          description: Discrepancy resolved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscrepancyDto'
+        '404':
+          description: Event not found
+
+  /api/v1/reconciliation/batches:
+    get:
+      tags: [Reconciliation]
+      operationId: getBatches
+      summary: List reconciliation batches
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: type
+          in: query
+          schema:
+            $ref: '#/components/schemas/BatchType'
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Batches page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PageReconciliationBatch'
+
+  /api/v1/reconciliation/batches/{batchId}:
+    get:
+      tags: [Reconciliation]
+      operationId: getBatch
+      summary: Get batch details
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: batchId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Batch details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconciliationBatch'
+        '404':
+          description: Batch not found
+
+  /api/v1/reconciliation/trigger:
+    post:
+      tags: [Reconciliation]
+      operationId: triggerReconciliation
+      summary: Trigger manual reconciliation
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '202':
+          description: Reconciliation triggered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  batchId:
+                    type: string
+                  periodStart:
+                    type: string
+                    format: date-time
+                  periodEnd:
+                    type: string
+                    format: date-time
+                  message:
+                    type: string
+
+  /api/v1/reconciliation/config:
+    get:
+      tags: [Reconciliation]
+      operationId: getReconciliationConfig
+      summary: Get reconciliation configuration
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+                  sla:
+                    type: object
+                    properties:
+                      publishToConsumeMs:
+                        type: integer
+                        format: int64
+                      consumeToProcessMs:
+                        type: integer
+                        format: int64
+                      e2eMaxMs:
+                        type: integer
+                        format: int64
+                  realtime:
+                    type: object
+                    properties:
+                      enabled:
+                        type: boolean
+                      intervalMs:
+                        type: integer
+                        format: int64
+                  hourly:
+                    type: object
+                    properties:
+                      enabled:
+                        type: boolean
+                      cron:
+                        type: string
+
+  /api/v1/reconciliation/health:
+    get:
+      tags: [Reconciliation]
+      operationId: reconciliationHealth
+      summary: Reconciliation health check
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Health status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  enabled:
+                    type: boolean
+                  lastRealtimeBatch:
+                    type: object
+                    nullable: true
+                    properties:
+                      batchId:
+                        type: string
+                      completedAt:
+                        type: string
+                        format: date-time
+                      matchRate:
+                        type: number
+                  lastHourlyBatch:
+                    type: object
+                    nullable: true
+                    properties:
+                      batchId:
+                        type: string
+                      completedAt:
+                        type: string
+                        format: date-time
+                      matchRate:
+                        type: number
+                  unresolvedDiscrepancies:
+                    type: integer
+                    format: int64
+
+  # ==================== ORDERS (Order Service :8081) ====================
+
+  /api/orders/validate:
+    post:
+      tags: [Orders]
+      operationId: validateOrder
+      summary: Validate an order
+      description: Validates the order request and returns validation results with individual checks.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderRequest'
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderValidation'
+        '400':
+          description: Invalid request
+
+  /api/orders/{orderId}/status:
+    put:
+      tags: [Orders]
+      operationId: updateOrderStatus
+      summary: Update order status
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: true
+          schema:
+            $ref: '#/components/schemas/OrderStatus'
+      responses:
+        '200':
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderUpdate'
+        '404':
+          description: Order not found
+
+  /api/orders/{orderId}/cancel:
+    post:
+      tags: [Orders]
+      operationId: cancelOrder
+      summary: Cancel an order
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: validationId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Order cancelled
+        '404':
+          description: Order not found
+
+  # ==================== INVENTORY (Inventory Service :8082) ====================
+
+  /api/inventory/reserve:
+    post:
+      tags: [Inventory]
+      operationId: reserveInventory
+      summary: Reserve inventory for an order
+      parameters:
+        - name: orderId
+          in: query
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/OrderItem'
+      responses:
+        '200':
+          description: Reservation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InventoryReservation'
+        '400':
+          description: Invalid request
+
+  /api/inventory/release/{reservationId}:
+    post:
+      tags: [Inventory]
+      operationId: releaseInventory
+      summary: Release an inventory reservation
+      parameters:
+        - name: reservationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Reservation released
+        '404':
+          description: Reservation not found
+
+  # ==================== PAYMENT GATEWAY (Payment Gateway :8083) ====================
+
+  /api/payments/authorize:
+    post:
+      tags: [Payment Gateway]
+      operationId: authorizePayment
+      summary: Authorize a payment
+      description: Places a hold on the customer's payment method for the specified amount.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentDetails'
+      responses:
+        '200':
+          description: Authorization result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentAuth'
+        '400':
+          description: Invalid payment details
+        '402':
+          description: Payment declined
+
+  /api/payments/capture/{authId}:
+    post:
+      tags: [Payment Gateway]
+      operationId: capturePayment
+      summary: Capture an authorized payment
+      description: Captures (settles) a previously authorized payment.
+      parameters:
+        - name: authId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Capture result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentCapture'
+        '404':
+          description: Authorization not found
+        '409':
+          description: Authorization already captured or voided
+
+  /api/payments/void/{authId}:
+    post:
+      tags: [Payment Gateway]
+      operationId: voidAuthorization
+      summary: Void an authorization
+      description: Releases the hold on the customer's payment method.
+      parameters:
+        - name: authId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Authorization voided
+        '404':
+          description: Authorization not found
+        '409':
+          description: Authorization already captured or voided
+
+  /api/payments/refund/{captureId}:
+    post:
+      tags: [Payment Gateway]
+      operationId: refundPayment
+      summary: Refund a captured payment
+      parameters:
+        - name: captureId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Payment refunded
+        '404':
+          description: Capture not found
+        '409':
+          description: Payment already refunded
+
+  # ==================== WEBHOOKS (Payment Gateway :8083) ====================
+
+  /api/webhooks/{channel}:
+    post:
+      tags: [Webhooks]
+      operationId: receiveWebhook
+      summary: Receive webhook from payment channel
+      description: |
+        Ingests webhooks from external PSPs (Stripe, PayPal, Adyen, Square).
+        Verifies signatures, deduplicates events, and publishes to Kafka via
+        the transactional outbox pattern (CDC with Debezium).
+      parameters:
+        - name: channel
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [stripe, paypal, adyen, square]
+          description: Payment channel identifier
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: string
+              description: Raw webhook payload from the PSP
+      responses:
+        '200':
+          description: Webhook processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookResponse'
+        '400':
+          description: Invalid webhook payload
+        '401':
+          description: Invalid webhook signature
+        '409':
+          description: Duplicate webhook (already processed)
+
+  # ==================== CONSENT MANAGEMENT (Open Banking :8084) ====================
+
+  /open-banking/v1/consents:
+    post:
+      tags: [Consent Management]
+      operationId: requestConsent
+      summary: Request customer consent
+      description: |
+        TPP requests consent from a customer to access their account information
+        or initiate payments. Maximum validity is 90 days per SBV Circular 64.
+      security:
+        - bearerAuth: [consent:create]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConsentRequest'
+      responses:
+        '201':
+          description: Consent created (awaiting customer authorization)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsentResponse'
+        '400':
+          description: Invalid request
+        '401':
+          description: Unauthorized
+        '403':
+          description: TPP not active
+    get:
+      tags: [Consent Management]
+      operationId: getCustomerConsents
+      summary: List customer consents
+      security:
+        - bearerAuth: [consent:read]
+      responses:
+        '200':
+          description: Customer consents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ConsentResponse'
+
+  /open-banking/v1/consents/{consentId}:
+    get:
+      tags: [Consent Management]
+      operationId: getConsent
+      summary: Get consent details
+      security:
+        - bearerAuth: [consent:read]
+      parameters:
+        - name: consentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Consent details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsentResponse'
+        '404':
+          description: Consent not found
+    delete:
+      tags: [Consent Management]
+      operationId: revokeConsent
+      summary: Revoke consent
+      security:
+        - bearerAuth: [consent:revoke]
+      parameters:
+        - name: consentId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        '204':
+          description: Consent revoked
+        '403':
+          description: Not authorized to revoke this consent
+        '404':
+          description: Consent not found
+
+  /open-banking/v1/consents/{consentId}/authorize:
+    post:
+      tags: [Consent Management]
+      operationId: authorizeConsent
+      summary: Authorize consent (after SCA)
+      description: Customer authorizes a consent request after completing Strong Customer Authentication.
+      security:
+        - bearerAuth: [consent:authorize]
+      parameters:
+        - name: consentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Consent authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsentResponse'
+        '400':
+          description: Invalid consent state
+        '403':
+          description: Not the consent's customer
+        '404':
+          description: Consent not found
+
+  # ==================== TPP REGISTRATION (Open Banking :8084) ====================
+
+  /open-banking/v1/tpp/register:
+    post:
+      tags: [TPP Registration]
+      operationId: registerTpp
+      summary: Register a Third Party Provider
+      description: |
+        Registers a new TPP with SBV license verification.
+        Returns API credentials upon successful registration.
+      security:
+        - bearerAuth: [tpp:register]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TppRegistrationRequest'
+      responses:
+        '201':
+          description: TPP registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TppRegistrationResult'
+        '400':
+          description: Invalid request or duplicate SBV license
+        '401':
+          description: Unauthorized
+
+  /open-banking/v1/tpp/{tppId}:
+    get:
+      tags: [TPP Registration]
+      operationId: getTpp
+      summary: Get TPP details
+      security:
+        - bearerAuth: [tpp:read]
+      parameters:
+        - name: tppId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: TPP details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TppResponse'
+        '404':
+          description: TPP not found
+
+  /open-banking/v1/tpp/{tppId}/activate:
+    put:
+      tags: [TPP Registration]
+      operationId: activateTpp
+      summary: Activate a TPP
+      security:
+        - bearerAuth: [tpp:admin]
+      parameters:
+        - name: tppId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: TPP activated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TppResponse'
+        '400':
+          description: License expired
+        '404':
+          description: TPP not found
+
+  /open-banking/v1/tpp/{tppId}/suspend:
+    put:
+      tags: [TPP Registration]
+      operationId: suspendTpp
+      summary: Suspend a TPP
+      security:
+        - bearerAuth: [tpp:admin]
+      parameters:
+        - name: tppId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: TPP suspended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TppResponse'
+        '404':
+          description: TPP not found
+
+  /open-banking/v1/tpp/{tppId}/credentials:
+    post:
+      tags: [TPP Registration]
+      operationId: rotateCredentials
+      summary: Rotate API credentials
+      description: Generates new API key for the TPP. Old key is invalidated.
+      security:
+        - bearerAuth: [tpp:credentials]
+      parameters:
+        - name: tppId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: New credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TppCredentials'
+        '404':
+          description: TPP not found
+
+  /open-banking/v1/tpp/{tppId}/tiers/{tier}:
+    post:
+      tags: [TPP Registration]
+      operationId: grantTier
+      summary: Grant API tier to TPP
+      security:
+        - bearerAuth: [tpp:admin]
+      parameters:
+        - name: tppId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: tier
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ApiTier'
+      responses:
+        '200':
+          description: Tier granted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TppResponse'
+        '404':
+          description: TPP not found
+
+  /open-banking/v1/tpp:
+    get:
+      tags: [TPP Registration]
+      operationId: getActiveTpps
+      summary: List active TPPs
+      security:
+        - bearerAuth: [tpp:admin]
+      responses:
+        '200':
+          description: Active TPPs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TppResponse'
+
+  # ==================== ACCOUNT INFORMATION (Open Banking :8084) ====================
+
+  /open-banking/v1/accounts:
+    get:
+      tags: [Account Information]
+      operationId: listAccounts
+      summary: List customer accounts (Tier 1)
+      security:
+        - bearerAuth: [openbanking:ais]
+      responses:
+        '200':
+          description: Customer accounts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AccountSummary'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Not authorized for this tier
+
+  /open-banking/v1/accounts/{accountId}:
+    get:
+      tags: [Account Information]
+      operationId: getAccount
+      summary: Get account details (Tier 1)
+      security:
+        - bearerAuth: [openbanking:ais]
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Account details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountDetail'
+        '404':
+          description: Account not found
+
+  /open-banking/v1/accounts/{accountId}/balance:
+    get:
+      tags: [Account Information]
+      operationId: getBalance
+      summary: Get account balance (Tier 2)
+      description: Requires active consent with BALANCES permission.
+      security:
+        - bearerAuth: [openbanking:ais]
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Account balance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountBalance'
+        '403':
+          description: Consent required for balance access
+        '404':
+          description: Account not found
+
+  /open-banking/v1/accounts/{accountId}/transactions:
+    get:
+      tags: [Account Information]
+      operationId: getTransactions
+      summary: Get account transactions (Tier 2)
+      description: Requires active consent with TRANSACTIONS permission.
+      security:
+        - bearerAuth: [openbanking:ais]
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: fromDate
+          in: query
+          schema:
+            type: string
+            format: date
+          description: Filter from date (ISO-8601)
+        - name: toDate
+          in: query
+          schema:
+            type: string
+            format: date
+          description: Filter to date (ISO-8601)
+      responses:
+        '200':
+          description: Transactions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionList'
+        '403':
+          description: Consent required for transaction access
+        '404':
+          description: Account not found
+
+  # ==================== PAYMENT INITIATION (Open Banking :8084) ====================
+
+  /open-banking/v1/payments:
+    post:
+      tags: [Payment Initiation]
+      operationId: initiatePayment
+      summary: Initiate payment (Tier 3)
+      description: |
+        Initiates a payment on behalf of a customer. Requires active consent with
+        PAYMENTS permission and Strong Customer Authentication (SCA).
+      security:
+        - bearerAuth: [openbanking:pis]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentInitiationRequest'
+      responses:
+        '201':
+          description: Payment initiated (awaiting SCA)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentInitiationResponse'
+        '400':
+          description: Invalid payment request
+        '403':
+          description: Consent required for payment initiation
+
+  /open-banking/v1/payments/{paymentId}:
+    get:
+      tags: [Payment Initiation]
+      operationId: getOBPaymentStatus
+      summary: Get payment status
+      security:
+        - bearerAuth: [openbanking:pis]
+      parameters:
+        - name: paymentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Payment status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentStatusResponse'
+        '404':
+          description: Payment not found
+
+  /open-banking/v1/payments/{paymentId}/confirm:
+    post:
+      tags: [Payment Initiation]
+      operationId: confirmPayment
+      summary: Confirm payment after SCA
+      security:
+        - bearerAuth: [openbanking:pis]
+      parameters:
+        - name: paymentId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScaConfirmationRequest'
+      responses:
+        '200':
+          description: Payment confirmed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentConfirmationResponse'
+        '400':
+          description: Invalid SCA or payment already processed
+        '404':
+          description: Payment not found
+
+  # ==================== NAPAS INTEGRATION (Internal :8084) ====================
+
+  /internal/napas/pain001/generate:
+    post:
+      tags: [NAPAS Integration]
+      operationId: generatePain001
+      summary: Generate ISO 20022 pain.001 Credit Transfer Initiation
+      description: "Internal endpoint. Generates a pain.001.001.09 XML message for NAPAS."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Pain001Request'
+      responses:
+        '200':
+          description: pain.001 XML generated
+          content:
+            application/xml:
+              schema:
+                type: string
+
+  /internal/napas/pain002/receive:
+    post:
+      tags: [NAPAS Integration]
+      operationId: receivePain002
+      summary: Receive ISO 20022 pain.002 Payment Status Report
+      description: "Internal endpoint. Processes incoming pain.002 status reports from NAPAS."
+      requestBody:
+        required: true
+        content:
+          application/xml:
+            schema:
+              type: string
+      responses:
+        '200':
+          description: Status report processed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  received:
+                    type: boolean
+                  paymentId:
+                    type: string
+                  status:
+                    type: string
+                  transactionStatus:
+                    type: string
+                  reasonCode:
+                    type: string
+                  processedAt:
+                    type: string
+                    format: date-time
+        '400':
+          description: Invalid XML
+
+  /internal/napas/pain002/generate:
+    post:
+      tags: [NAPAS Integration]
+      operationId: generatePain002
+      summary: Generate ISO 20022 pain.002 response
+      description: "Internal endpoint. Generates a pain.002 response XML."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Pain002Request'
+      responses:
+        '200':
+          description: pain.002 XML generated
+          content:
+            application/xml:
+              schema:
+                type: string
+
+  /internal/napas/pain001/validate:
+    post:
+      tags: [NAPAS Integration]
+      operationId: validatePain001
+      summary: Validate pain.001 message
+      description: "Internal endpoint. Validates a pain.001 XML message structure."
+      requestBody:
+        required: true
+        content:
+          application/xml:
+            schema:
+              type: string
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                  messageType:
+                    type: string
+                  validatedAt:
+                    type: string
+                    format: date-time
+
+  # ==================== KONG AUDIT (Internal :8084) ====================
+
+  /internal/audit/kong:
+    post:
+      tags: [Kong Audit]
+      operationId: receiveKongAuditLog
+      summary: Receive Kong Gateway audit log
+      description: "Internal endpoint. Receives audit logs from Kong Gateway's http-log plugin."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/KongLogEntry'
+      responses:
+        '200':
+          description: Log received
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  received:
+                    type: boolean
+                  processedAt:
+                    type: string
+                    format: date-time
+
+# ==============================================================================
+# COMPONENTS
+# ==============================================================================
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT Bearer token. Claims include: sub, tpp_id, customer_id, consent_id.
+        Authorities: ROLE_TPP, ROLE_CUSTOMER, ROLE_ADMIN, TPP_TIER_1/2/3,
+        PERMISSION_payment:create/read/cancel, PERMISSION_consent:create/read/authorize/revoke,
+        PERMISSION_tpp:register/read/admin/credentials.
+    oauth2:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://auth.paylink.com/oauth/authorize
+          tokenUrl: https://auth.paylink.com/oauth/token
+          scopes:
+            payment:create: Create payment workflows
+            payment:read: Read payment status
+            payment:cancel: Cancel payment workflows
+            payment:refund: Refund payments
+            consent:create: Create consents
+            consent:read: Read consent details
+            consent:authorize: Authorize consents
+            consent:revoke: Revoke consents
+            tpp:register: Register TPPs
+            tpp:read: Read TPP details
+            tpp:admin: Administer TPPs
+            tpp:credentials: Manage TPP credentials
+            openbanking:ais: Account Information Services
+            openbanking:pis: Payment Initiation Services
+
+  schemas:
+    # ==================== REQUEST DTOs ====================
+
+    OrderRequest:
+      type: object
+      required: [orderId, customerId, amount, currency, items, paymentDetails]
+      properties:
+        orderId:
+          type: string
+          minLength: 1
+          description: Unique order identifier
+        customerId:
+          type: string
+          minLength: 1
+          description: Customer identifier
+        amount:
+          type: number
+          format: decimal
+          minimum: 0
+          exclusiveMinimum: true
+          description: Total order amount
+        currency:
+          type: string
+          minLength: 3
+          maxLength: 3
+          description: ISO 4217 currency code
+        customer:
+          $ref: '#/components/schemas/CustomerInfo'
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/OrderItem'
+        paymentDetails:
+          $ref: '#/components/schemas/PaymentDetails'
+        shippingAddress:
+          $ref: '#/components/schemas/ShippingAddress'
+        metadata:
+          type: object
+          additionalProperties: true
+        requestedAt:
+          type: string
+          format: date-time
+        idempotencyKey:
+          type: string
+
+    OrderItem:
+      type: object
+      required: [sku, price]
+      properties:
+        sku:
+          type: string
+          minLength: 1
+        name:
+          type: string
+        description:
+          type: string
+        price:
+          type: number
+          format: decimal
+          minimum: 0
+        quantity:
+          type: integer
+          minimum: 1
+          default: 1
+        discount:
+          type: number
+          format: decimal
+          default: 0
+        category:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        attributes:
+          type: object
+          additionalProperties:
+            type: string
+        imageUrl:
+          type: string
+        sellerId:
+          type: string
+
+    PaymentDetails:
+      type: object
+      required: [paymentMethod, amount, currency]
+      properties:
+        orderId:
+          type: string
+        customerId:
+          type: string
+        paymentMethod:
+          $ref: '#/components/schemas/PaymentMethod'
+        amount:
+          type: number
+          format: decimal
+          minimum: 0
+          exclusiveMinimum: true
+        currency:
+          type: string
+          minLength: 3
+          maxLength: 3
+        paymentToken:
+          type: string
+          description: Tokenized payment instrument (never raw card data)
+        cardBrand:
+          type: string
+        cardLast4:
+          type: string
+        expiryMonth:
+          type: integer
+        expiryYear:
+          type: integer
+        billingAddress:
+          $ref: '#/components/schemas/BillingAddress'
+        threeDSecure:
+          $ref: '#/components/schemas/ThreeDSecureData'
+        gatewayMetadata:
+          type: string
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+
+    CustomerInfo:
+      type: object
+      properties:
+        customerId:
+          type: string
+        email:
+          type: string
+          format: email
+        firstName:
+          type: string
+        lastName:
+          type: string
+        phone:
+          type: string
+        locale:
+          type: string
+        status:
+          $ref: '#/components/schemas/CustomerStatus'
+
+    ShippingAddress:
+      type: object
+      properties:
+        recipientName:
+          type: string
+        line1:
+          type: string
+        line2:
+          type: string
+        city:
+          type: string
+        state:
+          type: string
+        postalCode:
+          type: string
+        country:
+          type: string
+        phone:
+          type: string
+        instructions:
+          type: string
+
+    BillingAddress:
+      type: object
+      properties:
+        name:
+          type: string
+        line1:
+          type: string
+        line2:
+          type: string
+        city:
+          type: string
+        state:
+          type: string
+        postalCode:
+          type: string
+        country:
+          type: string
+
+    ThreeDSecureData:
+      type: object
+      properties:
+        cavv:
+          type: string
+        xid:
+          type: string
+        eci:
+          type: string
+        version:
+          type: string
+        authenticated:
+          type: boolean
+
+    ConsentRequest:
+      type: object
+      required: [customerId, consentType, permissions]
+      properties:
+        customerId:
+          type: string
+          minLength: 1
+        consentType:
+          $ref: '#/components/schemas/ConsentType'
+        permissions:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/PermissionType'
+        accountId:
+          type: string
+          description: Restrict consent to a specific account
+        validityDays:
+          type: integer
+          format: int64
+          maximum: 90
+          description: Maximum 90 days per SBV Circular 64
+
+    TppRegistrationRequest:
+      type: object
+      required: [organizationName, sbvLicenseNumber, licenseExpiry]
+      properties:
+        organizationName:
+          type: string
+          minLength: 1
+        sbvLicenseNumber:
+          type: string
+          minLength: 1
+          pattern: '^SBV-\d{4}-\d{3,6}$'
+          description: State Bank of Vietnam license number
+        licenseExpiry:
+          type: string
+          format: date-time
+        contactEmail:
+          type: string
+          format: email
+        webhookUrl:
+          type: string
+          format: uri
+        requestedTiers:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/ApiTier'
+        certificateThumbprint:
+          type: string
+          description: SHA-256 certificate thumbprint
+
+    PaymentInitiationRequest:
+      type: object
+      required: [debtorAccountId, creditorAccountId, amount, currency]
+      properties:
+        debtorAccountId:
+          type: string
+          minLength: 1
+        creditorAccountId:
+          type: string
+          minLength: 1
+        creditorName:
+          type: string
+        amount:
+          type: number
+          format: decimal
+          minimum: 0
+          exclusiveMinimum: true
+        currency:
+          type: string
+          minLength: 1
+        paymentReference:
+          type: string
+        endToEndIdentification:
+          type: string
+
+    ScaConfirmationRequest:
+      type: object
+      required: [scaMethod]
+      properties:
+        scaMethod:
+          type: string
+          minLength: 1
+          enum: [REDIRECT, OTP, PUSH]
+        scaToken:
+          type: string
+        otpCode:
+          type: string
+
+    ResolveDiscrepancyRequest:
+      type: object
+      required: [resolutionStatus]
+      properties:
+        resolutionStatus:
+          $ref: '#/components/schemas/ResolutionStatus'
+        notes:
+          type: string
+        resolvedBy:
+          type: string
+
+    Pain001Request:
+      type: object
+      properties:
+        paymentId:
+          type: string
+        debtorAccountId:
+          type: string
+        debtorName:
+          type: string
+        creditorAccountId:
+          type: string
+        creditorName:
+          type: string
+        amount:
+          type: number
+          format: decimal
+        currency:
+          type: string
+        paymentReference:
+          type: string
+
+    Pain002Request:
+      type: object
+      properties:
+        originalMessageId:
+          type: string
+        paymentId:
+          type: string
+        status:
+          type: string
+        reasonCode:
+          type: string
+        additionalInfo:
+          type: string
+        amount:
+          type: number
+          format: decimal
+        currency:
+          type: string
+
+    KongLogEntry:
+      type: object
+      properties:
+        request:
+          type: object
+          properties:
+            method:
+              type: string
+            uri:
+              type: string
+            url:
+              type: string
+            size:
+              type: integer
+              format: int64
+            headers:
+              type: object
+              additionalProperties:
+                type: string
+            querystring:
+              type: object
+              additionalProperties:
+                type: string
+        response:
+          type: object
+          properties:
+            status:
+              type: integer
+            size:
+              type: integer
+              format: int64
+            headers:
+              type: object
+              additionalProperties:
+                type: string
+        latencies:
+          type: object
+          properties:
+            request:
+              type: integer
+              format: int64
+            kong:
+              type: integer
+              format: int64
+            proxy:
+              type: integer
+              format: int64
+        clientIp:
+          type: string
+        startedAt:
+          type: integer
+          format: int64
+        tppId:
+          type: string
+        consentId:
+          type: string
+        apiTier:
+          type: string
+
+    # ==================== RESPONSE DTOs ====================
+
+    PaymentResult:
+      type: object
+      properties:
+        workflowId:
+          type: string
+        sagaId:
+          type: string
+        orderId:
+          type: string
+        status:
+          $ref: '#/components/schemas/PaymentResultStatus'
+        workflowState:
+          $ref: '#/components/schemas/WorkflowState'
+        businessState:
+          $ref: '#/components/schemas/PaymentState'
+        captureId:
+          type: string
+        authorizationId:
+          type: string
+        amount:
+          type: number
+          format: decimal
+        currency:
+          type: string
+        itemsProcessed:
+          type: integer
+        itemsFailed:
+          type: integer
+        errorMessage:
+          type: string
+        errorDetails:
+          type: object
+          additionalProperties: true
+        completedAt:
+          type: string
+          format: date-time
+        durationMs:
+          type: integer
+          format: int64
+
+    OrderValidation:
+      type: object
+      properties:
+        validationId:
+          type: string
+        orderId:
+          type: string
+        valid:
+          type: boolean
+        failureReason:
+          type: string
+        checks:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationCheck'
+        validatedAt:
+          type: string
+          format: date-time
+
+    ValidationCheck:
+      type: object
+      properties:
+        checkName:
+          type: string
+        passed:
+          type: boolean
+        message:
+          type: string
+
+    OrderUpdate:
+      type: object
+      properties:
+        orderId:
+          type: string
+        previousStatus:
+          $ref: '#/components/schemas/OrderStatus'
+        newStatus:
+          $ref: '#/components/schemas/OrderStatus'
+        success:
+          type: boolean
+        message:
+          type: string
+        updatedAt:
+          type: string
+          format: date-time
+
+    InventoryReservation:
+      type: object
+      properties:
+        reservationId:
+          type: string
+        orderId:
+          type: string
+        success:
+          type: boolean
+        failureReason:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReservedItem'
+        expiresAt:
+          type: string
+          format: date-time
+        reservedAt:
+          type: string
+          format: date-time
+
+    ReservedItem:
+      type: object
+      properties:
+        sku:
+          type: string
+        quantityReserved:
+          type: integer
+        warehouseId:
+          type: string
+
+    PaymentAuth:
+      type: object
+      properties:
+        authId:
+          type: string
+        orderId:
+          type: string
+        approved:
+          type: boolean
+        declineReason:
+          type: string
+        declineCode:
+          type: string
+        amount:
+          type: number
+          format: decimal
+        currency:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        gatewayReference:
+          type: string
+        avsResult:
+          type: string
+          description: Address Verification Service result
+        cvvResult:
+          type: string
+          description: CVV verification result
+        riskScore:
+          type: integer
+          minimum: 0
+          maximum: 100
+        threeDSecureStatus:
+          type: string
+        authorizedAt:
+          type: string
+          format: date-time
+
+    PaymentCapture:
+      type: object
+      properties:
+        captureId:
+          type: string
+        authId:
+          type: string
+        orderId:
+          type: string
+        success:
+          type: boolean
+        failureReason:
+          type: string
+        amount:
+          type: number
+          format: decimal
+        currency:
+          type: string
+        gatewayReference:
+          type: string
+        settlementDate:
+          type: string
+          format: date-time
+        processingFee:
+          type: number
+          format: decimal
+        netAmount:
+          type: number
+          format: decimal
+        capturedAt:
+          type: string
+          format: date-time
+
+    WebhookResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        eventId:
+          type: string
+        message:
+          type: string
+
+    ConsentResponse:
+      type: object
+      properties:
+        consentId:
+          type: string
+        customerId:
+          type: string
+        tppId:
+          type: string
+        consentType:
+          $ref: '#/components/schemas/ConsentType'
+        status:
+          $ref: '#/components/schemas/ConsentStatus'
+        permissions:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/PermissionType'
+        validFrom:
+          type: string
+          format: date-time
+        validUntil:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        authorizedAt:
+          type: string
+          format: date-time
+        revokedAt:
+          type: string
+          format: date-time
+        revokedReason:
+          type: string
+
+    TppResponse:
+      type: object
+      properties:
+        tppId:
+          type: string
+        organizationName:
+          type: string
+        sbvLicenseNumber:
+          type: string
+        licenseExpiry:
+          type: string
+          format: date-time
+        status:
+          $ref: '#/components/schemas/TppStatus'
+        authorizedTiers:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/ApiTier'
+        contactEmail:
+          type: string
+          format: email
+        webhookUrl:
+          type: string
+          format: uri
+        registeredAt:
+          type: string
+          format: date-time
+        lastVerifiedAt:
+          type: string
+          format: date-time
+
+    TppCredentials:
+      type: object
+      properties:
+        tppId:
+          type: string
+        apiKey:
+          type: string
+          description: Full API key (shown only once)
+        apiKeyPrefix:
+          type: string
+          description: Key prefix for identification
+        warning:
+          type: string
+          default: "Store this API key securely. It cannot be retrieved again."
+
+    TppRegistrationResult:
+      type: object
+      properties:
+        tpp:
+          $ref: '#/components/schemas/TppResponse'
+        credentials:
+          $ref: '#/components/schemas/TppCredentials'
+
+    PaymentInitiationResponse:
+      type: object
+      properties:
+        paymentId:
+          type: string
+        consentId:
+          type: string
+        status:
+          $ref: '#/components/schemas/OBPaymentStatus'
+        createdAt:
+          type: string
+          format: date-time
+        scaUrl:
+          type: string
+          format: uri
+        scaMethod:
+          type: string
+
+    PaymentStatusResponse:
+      type: object
+      properties:
+        paymentId:
+          type: string
+        status:
+          $ref: '#/components/schemas/OBPaymentStatus'
+        createdAt:
+          type: string
+          format: date-time
+        statusUpdateAt:
+          type: string
+          format: date-time
+        reasonCode:
+          type: string
+
+    PaymentConfirmationResponse:
+      type: object
+      properties:
+        paymentId:
+          type: string
+        status:
+          $ref: '#/components/schemas/OBPaymentStatus'
+        confirmedAt:
+          type: string
+          format: date-time
+        expectedSettlement:
+          type: string
+          format: date-time
+
+    AuditTrailResponse:
+      type: object
+      properties:
+        sagaId:
+          type: string
+        recordCount:
+          type: integer
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditRecordDto'
+
+    AuditSearchResponse:
+      type: object
+      properties:
+        totalRecords:
+          type: integer
+        page:
+          type: integer
+        size:
+          type: integer
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditRecordDto'
+
+    AuditRecordDto:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        sagaId:
+          type: string
+        workflowId:
+          type: string
+        fromState:
+          type: string
+        toState:
+          type: string
+        event:
+          type: string
+        accepted:
+          type: boolean
+        durationMs:
+          type: integer
+          format: int64
+        errorMessage:
+          type: string
+        userId:
+          type: string
+        correlationId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+        dataClassification:
+          type: string
+        regulatoryContext:
+          type: string
+        archived:
+          type: boolean
+
+    ArchivalStatusResponse:
+      type: object
+      properties:
+        archivalEnabled:
+          type: boolean
+        thresholdDays:
+          type: integer
+        pendingArchivalCount:
+          type: integer
+          format: int64
+
+    ArchivalResultResponse:
+      type: object
+      properties:
+        recordsArchived:
+          type: integer
+        message:
+          type: string
+
+    ReconciliationSummaryDto:
+      type: object
+      properties:
+        periodStart:
+          type: string
+          format: date-time
+        periodEnd:
+          type: string
+          format: date-time
+        totalEvents:
+          type: integer
+          format: int64
+        matchedEvents:
+          type: integer
+          format: int64
+        unmatchedEvents:
+          type: integer
+          format: int64
+        timeoutEvents:
+          type: integer
+          format: int64
+        errorEvents:
+          type: integer
+          format: int64
+        inProgressEvents:
+          type: integer
+          format: int64
+        matchRatePercent:
+          type: number
+          format: decimal
+        discrepanciesByType:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+        eventsByStatus:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+        unresolvedDiscrepancies:
+          type: integer
+          format: int64
+
+    LatencyReportDto:
+      type: object
+      properties:
+        periodStart:
+          type: string
+          format: date-time
+        periodEnd:
+          type: string
+          format: date-time
+        sampleSize:
+          type: integer
+          format: int64
+        p50LatencyMs:
+          type: integer
+          format: int64
+        p75LatencyMs:
+          type: integer
+          format: int64
+        p90LatencyMs:
+          type: integer
+          format: int64
+        p95LatencyMs:
+          type: integer
+          format: int64
+        p99LatencyMs:
+          type: integer
+          format: int64
+        maxLatencyMs:
+          type: integer
+          format: int64
+        avgLatencyMs:
+          type: integer
+          format: int64
+        avgPublishLatencyMs:
+          type: integer
+          format: int64
+          description: Average latency from created_at to published_at
+        avgKafkaLatencyMs:
+          type: integer
+          format: int64
+          description: Average latency from published_at to kafka_acked_at
+        avgConsumeLatencyMs:
+          type: integer
+          format: int64
+          description: Average latency from kafka_acked_at to consumed_at
+        avgProcessLatencyMs:
+          type: integer
+          format: int64
+          description: Average latency from consumed_at to processed_at
+        avgSignalLatencyMs:
+          type: integer
+          format: int64
+          description: Average latency from processed_at to workflow_signaled_at
+        slaCompliancePercent:
+          type: number
+          format: double
+        slaThresholdMs:
+          type: integer
+          format: int64
+        eventsWithinSla:
+          type: integer
+          format: int64
+        eventsExceedingSla:
+          type: integer
+          format: int64
+
+    EventTimelineDto:
+      type: object
+      properties:
+        eventId:
+          type: string
+        orderId:
+          type: string
+        sagaId:
+          type: string
+        eventType:
+          type: string
+        sourceService:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        publishedAt:
+          type: string
+          format: date-time
+        kafkaAckedAt:
+          type: string
+          format: date-time
+        consumedAt:
+          type: string
+          format: date-time
+        processedAt:
+          type: string
+          format: date-time
+        workflowSignaledAt:
+          type: string
+          format: date-time
+        kafkaTopic:
+          type: string
+        kafkaPartition:
+          type: integer
+        kafkaOffset:
+          type: integer
+          format: int64
+        reconciliationStatus:
+          $ref: '#/components/schemas/ReconciliationStatus'
+        discrepancyType:
+          $ref: '#/components/schemas/DiscrepancyType'
+        resolutionStatus:
+          $ref: '#/components/schemas/ResolutionStatus'
+        resolutionNotes:
+          type: string
+        resolvedAt:
+          type: string
+          format: date-time
+        resolvedBy:
+          type: string
+        publishLatencyMs:
+          type: integer
+          format: int64
+        kafkaLatencyMs:
+          type: integer
+          format: int64
+        consumeLatencyMs:
+          type: integer
+          format: int64
+        processLatencyMs:
+          type: integer
+          format: int64
+        signalLatencyMs:
+          type: integer
+          format: int64
+        e2eLatencyMs:
+          type: integer
+          format: int64
+
+    DiscrepancyDto:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        eventId:
+          type: string
+        orderId:
+          type: string
+        sagaId:
+          type: string
+        eventType:
+          type: string
+        sourceService:
+          type: string
+        reconciliationStatus:
+          $ref: '#/components/schemas/ReconciliationStatus'
+        discrepancyType:
+          $ref: '#/components/schemas/DiscrepancyType'
+        discrepancyDescription:
+          type: string
+        resolutionStatus:
+          $ref: '#/components/schemas/ResolutionStatus'
+        resolutionNotes:
+          type: string
+        resolvedAt:
+          type: string
+          format: date-time
+        resolvedBy:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    PageDiscrepancyDto:
+      type: object
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/DiscrepancyDto'
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+        size:
+          type: integer
+        number:
+          type: integer
+
+    ReconciliationBatch:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        batchId:
+          type: string
+        batchType:
+          $ref: '#/components/schemas/BatchType'
+        periodStart:
+          type: string
+          format: date-time
+        periodEnd:
+          type: string
+          format: date-time
+        status:
+          $ref: '#/components/schemas/BatchStatus'
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        errorMessage:
+          type: string
+        totalEvents:
+          type: integer
+          format: int64
+        matchedCount:
+          type: integer
+          format: int64
+        unmatchedCount:
+          type: integer
+          format: int64
+        timeoutCount:
+          type: integer
+          format: int64
+        errorCount:
+          type: integer
+          format: int64
+        p50LatencyMs:
+          type: integer
+          format: int64
+        p75LatencyMs:
+          type: integer
+          format: int64
+        p90LatencyMs:
+          type: integer
+          format: int64
+        p95LatencyMs:
+          type: integer
+          format: int64
+        p99LatencyMs:
+          type: integer
+          format: int64
+        maxLatencyMs:
+          type: integer
+          format: int64
+        avgLatencyMs:
+          type: integer
+          format: int64
+        matchRatePercent:
+          type: number
+          format: decimal
+
+    PageReconciliationBatch:
+      type: object
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReconciliationBatch'
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+        size:
+          type: integer
+        number:
+          type: integer
+
+    AccountSummary:
+      type: object
+      properties:
+        accountId:
+          type: string
+        accountType:
+          type: string
+          enum: [SAVINGS, CURRENT, CREDIT]
+        currency:
+          type: string
+        nickname:
+          type: string
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE, CLOSED]
+
+    AccountDetail:
+      type: object
+      properties:
+        accountId:
+          type: string
+        accountType:
+          type: string
+        currency:
+          type: string
+        nickname:
+          type: string
+        status:
+          type: string
+        openingDate:
+          type: string
+          format: date
+        servicer:
+          type: object
+          properties:
+            schemeName:
+              type: string
+            identification:
+              type: string
+
+    AccountBalance:
+      type: object
+      properties:
+        accountId:
+          type: string
+        balances:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                enum: [AVAILABLE, CURRENT]
+              amount:
+                type: number
+                format: decimal
+              currency:
+                type: string
+              dateTime:
+                type: string
+                format: date-time
+
+    TransactionList:
+      type: object
+      properties:
+        accountId:
+          type: string
+        transactions:
+          type: array
+          items:
+            type: object
+            properties:
+              transactionId:
+                type: string
+              amount:
+                type: number
+                format: decimal
+              creditDebitIndicator:
+                type: string
+                enum: [CREDIT, DEBIT]
+              status:
+                type: string
+                enum: [BOOKED, PENDING]
+              bookingDate:
+                type: string
+                format: date
+              transactionReference:
+                type: string
+              merchantName:
+                type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+
+    # ==================== ENUMS ====================
+
+    PaymentMethod:
+      type: string
+      enum:
+        - CREDIT_CARD
+        - DEBIT_CARD
+        - BANK_TRANSFER
+        - ACH_TRANSFER
+        - WIRE_TRANSFER
+        - SEPA_TRANSFER
+        - DIGITAL_WALLET
+        - BUY_NOW_PAY_LATER
+        - LOYALTY_POINTS
+        - GIFT_CARD
+        - STORE_CREDIT
+        - LOAN_ACCOUNT
+        - LINE_OF_CREDIT
+        - BROKERAGE_ACCOUNT
+        - MUTUAL_FUND
+        - BITCOIN
+        - ETHEREUM
+        - USDC
+        - USDT
+        - MERCHANT_CREDIT
+        - AFFILIATE_PAYOUT
+
+    OrderStatus:
+      type: string
+      enum:
+        - PENDING
+        - VALIDATED
+        - PROCESSING
+        - PAYMENT_PENDING
+        - PAYMENT_AUTHORIZED
+        - PAYMENT_CAPTURED
+        - COMPLETED
+        - CANCELLED
+        - REFUNDED
+        - FAILED
+
+    CustomerStatus:
+      type: string
+      enum: [ACTIVE, SUSPENDED, PENDING_VERIFICATION]
+
+    PaymentResultStatus:
+      type: string
+      enum:
+        - SUCCESS
+        - FAILED
+        - CANCELLED
+        - COMPENSATED
+        - PENDING
+        - REQUIRES_INTERVENTION
+
+    WorkflowState:
+      type: string
+      description: Temporal workflow lifecycle state
+      enum:
+        - INITIALIZED
+        - INITIALIZING
+        - RUNNING
+        - VALIDATING_ORDER
+        - RESERVING_INVENTORY
+        - AUTHORIZING_PAYMENT
+        - CAPTURING_PAYMENT
+        - COMPLETING_ORDER
+        - COMPLETED
+        - COMPENSATING
+        - FAILED
+        - CANCELLED
+        - REQUIRES_INTERVENTION
+
+    PaymentState:
+      type: string
+      description: Spring State Machine business state
+      enum:
+        - PENDING
+        - VALIDATING
+        - VALIDATED
+        - RESERVING
+        - RESERVED
+        - AUTHORIZING
+        - AUTHORIZED
+        - CAPTURING
+        - CAPTURED
+        - COMPLETING
+        - COMPLETED
+        - COMPENSATING
+        - COMPENSATED
+        - FAILED
+        - COMPENSATION_FAILED
+
+    ConsentType:
+      type: string
+      enum:
+        - AIS   # Account Information Services
+        - PIS   # Payment Initiation Services
+        - CBPII # Card-Based Payment Instrument Issuer
+
+    ConsentStatus:
+      type: string
+      enum:
+        - AWAITING_AUTHORIZATION
+        - AUTHORIZED
+        - REVOKED
+        - EXPIRED
+        - REJECTED
+
+    PermissionType:
+      type: string
+      description: "Tier 1: ACCOUNTS, PRODUCTS. Tier 2: BALANCES, TRANSACTIONS, etc. Tier 3: PAYMENTS, PAYMENT_STATUS."
+      enum:
+        - ACCOUNTS
+        - PRODUCTS
+        - BALANCES
+        - TRANSACTIONS
+        - TRANSACTIONS_DETAIL
+        - STANDING_ORDERS
+        - DIRECT_DEBITS
+        - BENEFICIARIES
+        - PAYMENTS
+        - PAYMENT_STATUS
+
+    TppStatus:
+      type: string
+      enum: [PENDING, ACTIVE, SUSPENDED, REVOKED]
+
+    ApiTier:
+      type: string
+      description: "Tier 1: Information Query. Tier 2: Account Info (requires consent). Tier 3: Payment Initiation (requires consent + SCA)."
+      enum: [TIER_1, TIER_2, TIER_3]
+
+    OBPaymentStatus:
+      type: string
+      description: Open Banking payment lifecycle status
+      enum:
+        - REQUIRES_SCA
+        - PENDING
+        - REJECTED
+        - ACCEPTED_SETTLEMENT_IN_PROCESS
+        - ACCEPTED_SETTLEMENT_COMPLETED
+        - CANCELLED
+
+    ReconciliationStatus:
+      type: string
+      enum:
+        - PENDING_PUBLISH
+        - PUBLISHED
+        - KAFKA_ACKED
+        - CONSUMED
+        - PROCESSED
+        - COMPLETED
+        - TIMEOUT
+        - ERROR
+
+    DiscrepancyType:
+      type: string
+      enum:
+        - PUBLISH_TIMEOUT
+        - KAFKA_DELIVERY_TIMEOUT
+        - CONSUME_TIMEOUT
+        - PROCESSING_TIMEOUT
+        - WORKFLOW_SIGNAL_TIMEOUT
+        - WORKFLOW_SIGNAL_FAILED
+        - WORKFLOW_NOT_FOUND
+        - DUPLICATE_EVENT
+        - KAFKA_METADATA_MISMATCH
+        - PAYLOAD_ERROR
+        - UNKNOWN
+
+    ResolutionStatus:
+      type: string
+      enum:
+        - UNRESOLVED
+        - RESOLVED
+        - IGNORED
+        - ESCALATED
+        - AUTO_RESOLVED
+
+    BatchType:
+      type: string
+      enum: [REALTIME, HOURLY, DAILY, MANUAL]
+
+    BatchStatus:
+      type: string
+      enum: [RUNNING, COMPLETED, FAILED]

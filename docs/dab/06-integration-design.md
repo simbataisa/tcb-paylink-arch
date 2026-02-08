@@ -60,18 +60,64 @@
 }
 ```
 
-## API Specification
+## REST API Specification
 
-| # | Service | Method | Endpoint | Description |
+The platform exposes **54 REST endpoints** across 13 controllers in 5 microservices. The full specification is available in two formats:
+
+- **[OpenAPI 3.0.3 YAML](openapi.yaml)** — Machine-readable specification for code generation, Swagger UI, and API gateway configuration
+- **[REST API Reference](openapi-reference.md)** — Human-readable rendered documentation with endpoint tables, response codes, and schema summaries
+
+### API Summary
+
+| Service | Port | Controller | Endpoints | Auth |
 |---|---|---|---|---|
-| 1 | Orchestrator | POST | `/api/v1/payments` | Initiate payment SAGA workflow |
-| 2 | Orchestrator | GET | `/api/v1/payments/{orderId}` | Query payment status |
-| 3 | Orchestrator | POST | `/api/v1/payments/{orderId}/cancel` | Cancel running workflow |
-| 4 | Order Service | POST | `/api/v1/orders/validate` | Validate order request |
-| 5 | Inventory Service | POST | `/api/v1/inventory/reserve` | Reserve inventory |
-| 6 | Payment Gateway | POST | `/api/v1/payments/authorize` | Authorize payment |
-| 7 | Payment Gateway | POST | `/api/webhooks/{provider}` | Receive PSP webhooks |
-| 8 | Open Banking | POST | `/api/v1/open-banking/payments` | Initiate payment (TPP) |
+| **Orchestrator** | 9090 | PaymentController | 5 | OAuth2 / JWT |
+| | | AuditController | 5 | JWT |
+| | | ReconciliationController | 10 | JWT |
+| **Order Service** | 8081 | OrderController | 3 | Internal |
+| **Inventory Service** | 8082 | InventoryController | 2 | Internal |
+| **Payment Gateway** | 8083 | PaymentGatewayController | 4 | Internal |
+| | | WebhookController | 1 | Signature verification |
+| **Open Banking** | 8084 | ConsentController | 5 | OAuth2 / JWT |
+| | | TppController | 7 | OAuth2 / JWT |
+| | | AccountInfoController | 4 | OAuth2 / JWT (Tier 1-3) |
+| | | PaymentInitiationController | 3 | OAuth2 / JWT (Tier 3 + SCA) |
+| | | NapasIntegrationController | 4 | Internal |
+| | | KongAuditController | 1 | Internal |
+
+### Key Endpoints
+
+```bash
+# Initiate a payment SAGA workflow
+POST /api/v1/payments
+
+# Get payment status / result
+GET  /api/v1/payments/{workflowId}
+GET  /api/v1/payments/{workflowId}/result
+
+# Cancel a payment
+POST /api/v1/payments/{workflowId}/cancel
+
+# Receive PSP webhook (Stripe, PayPal, Adyen, Square)
+POST /api/webhooks/{channel}
+
+# Open Banking — Consent flow
+POST /open-banking/v1/consents
+POST /open-banking/v1/consents/{consentId}/authorize
+
+# Open Banking — Payment initiation (Tier 3)
+POST /open-banking/v1/payments
+POST /open-banking/v1/payments/{paymentId}/confirm
+```
+
+### Security Schemes
+
+| Scheme | Type | Usage |
+|---|---|---|
+| `bearerAuth` | HTTP Bearer (JWT) | All authenticated endpoints |
+| `oauth2` | OAuth 2.0 Authorization Code + PKCE | External-facing APIs |
+
+**OAuth2 Scopes:** `payment:create`, `payment:read`, `payment:cancel`, `payment:refund`, `consent:create/read/authorize/revoke`, `tpp:register/read/admin/credentials`, `openbanking:ais`, `openbanking:pis`
 
 ---
 
