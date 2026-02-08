@@ -148,20 +148,22 @@ The following table maps each Enterprise Architecture component to its implement
 | **Payment Core — Preparing** | Acceptance & Mapping | `Order Service` — order validation, request mapping | Implemented |
 | **Payment Core — Preparing** | Deduplication & Prioritising | `PaymentRouter` (customer-hash sharding, 4 priorities) + `WebhookIdempotencyService` | Implemented |
 | **Payment Core — Preparing** | Business Validations | `Order Service` — business rule validation, amount/currency checks | Implemented |
-| **Payment Core — Preparing** | Fraud & Risk Filters | `Payment Gateway Service` — delegated to PSP fraud engines (Stripe Radar, etc.) | Delegated |
+| **Payment Core — Preparing** | Fraud & Risk Filters | `com.payment.saga.core.preparing.fraud` — stub implementation with `fraud_screening_results` and `fraud_alerts` entities (V15). Also delegated to PSP fraud engines. | Stub + Entities |
 | **Payment Core — Processing** | Fund Reservation | `Inventory Service` — inventory reservation with TTL and optimistic locking | Implemented |
-| **Payment Core — Processing** | FX Conversion | Not in v1.0 scope — future integration with Visual FX / Core Banking | Planned |
+| **Payment Core — Processing** | FX Conversion | `com.payment.saga.core.processing.fx` — stub implementation with `fx_rates` and `currency_conversions` entities (V16). Future integration with Visual FX / Core Banking. | Stub + Entities |
 | **Payment Core — Processing** | Fee & Posting Scheme | `Payment Gateway Service` — authorize and capture via PSP APIs | Implemented |
 | **Payment Core — Processing** | Routing & Settlement | `PaymentRouter` (36 task queues) + PSP settlement (Stripe/PayPal/Adyen/Square) | Implemented |
 | **Payment Core — Finalizing** | Automated Repair | LIFO compensation stack + DLT (`webhook.payment.events.DLT`) for manual review | Implemented |
-| **Payment Core — Finalizing** | Clearing | Post-capture reconciliation via domain events (`payment.payment.captured`) | Implemented |
+| **Payment Core — Finalizing** | Clearing | `com.payment.saga.core.finalizing.clearing` — stub implementation with `clearing_batches`, `clearing_records`, and `settlement_schedules` entities (V17). Post-capture reconciliation via domain events. | Stub + Entities |
 | **Payment Core — Finalizing** | Interfacing | CDC Outbox → Debezium → Kafka → downstream event consumers | Implemented |
 | **Payment Core — Finalizing** | Housekeeping | `WebhookKafkaCdcCleanupJob` (hourly), audit retention (7-year trigger-protected) | Implemented |
-| **Financial Gateways** | Payment Network Management | `Payment Gateway Service` — PSP adapters (Stripe, PayPal, Adyen, Square) | Implemented |
+| **Financial Gateways** | Payment Network Management | `Payment Gateway Service` — PSP adapters (Stripe, PayPal, Adyen, Square). `network_status` entity added (V6). | Implemented |
 | **Financial Gateways** | Network Routing | `WebhookProcessorEngine` — provider-specific webhook routing and dispatch | Implemented |
 | **Financial Gateways** | Messaging Formatting | Jackson serialization, webhook event mapping, `WebhookKafkaEvent` DTO | Implemented |
-| **Financial Gateways** | Clearing Limit | PSP-enforced authorization limits + application-level amount validation | Delegated |
-| **Payment Product** | Direct Payment (Portal, Debit, Instant) | REST APIs via Kong (`/api/v1/payments`, `/api/v1/orders`) | Implemented |
+| **Financial Gateways** | Clearing Limit | `clearing_limits` entity added (V6). PSP-enforced authorization limits + application-level amount validation. | Stub + Entities |
+| **Payment Product** | Direct Payment — Portal | REST APIs via Kong (`/api/v1/payments`, `/api/v1/orders`) | Implemented |
+| **Payment Product** | Direct Payment — Direct Debit | `com.payment.saga.product.debit` — DebitRequest, DebitResult, DebitWorkflow | Implemented |
+| **Payment Product** | Direct Payment — Instant Payment | `com.payment.saga.product.instant` — InstantPaymentService interface, DTOs. Routes via NAPAS/CITAD. | Stub |
 | **Payment Product** | Open Banking | `Open Banking API` module — SBV Circular 64, TPP tiering, consent, SCA | Implemented |
 | **Payment Product** | Features Rich (Billings, FXTT, Schedule) | Not in v1.0 scope — future product modules | Planned |
 | **Bank-wide Integration** | ESB / Integration Layer | Kong API Gateway (north-south) + Istio Service Mesh (east-west) | Implemented |
@@ -498,10 +500,10 @@ C4Component
 | **API Gateway** | Kong | 3.4 | Ingress routing, rate limiting, JWT validation |
 | **Service Mesh** | Istio | 1.20 | mTLS, AuthorizationPolicy, circuit breaking |
 | **Container Orchestration** | AWS EKS | 1.28 | Managed Kubernetes, HPA, PDB |
-| **Migration** | Flyway | 10.4.1 | Versioned schema migrations (V1–V14) |
+| **Migration** | Flyway | 10.4.1 | Versioned schema migrations (saga_db V1,V3–V17; order_db V1; inventory_db V1; payment_db V1–V6) |
 | **Observability** | Micrometer + Prometheus + Grafana + Zipkin | — | Metrics, dashboards, distributed tracing |
 | **Build** | Maven | 3.9 | Multi-module project, dependency management |
-| **Testing** | JUnit 5 + Mockito + TestContainers | — | 413 tests, real PostgreSQL/Kafka in tests |
+| **Testing** | JUnit 5 + Mockito + TestContainers | — | 703 tests (34 skipped), real PostgreSQL/Kafka in tests |
 
 ---
 

@@ -144,10 +144,10 @@ erDiagram
 
 | Database | Port | Tables | Migration Range | Key Features |
 |---|---|---|---|---|
-| **saga_db** | 5436 | payment_requests, state_machine_context, outbox_events, event_store | V1–V14 | RLS policies, event sourcing, JSONB payloads |
-| **order_db** | 5432 | orders, order_items | V1–V4 | Composite indexes on customer_id + status |
-| **inventory_db** | 5434 | products, inventory_reservations | V1–V5 | Optimistic locking, reservation TTL |
-| **payment_db** | 5435 | payment_authorizations, payment_captures, payment_refunds, webhook_kafka_outbox | V1–V8 | CDC publication, FOR UPDATE SKIP LOCKED |
+| **saga_db** | 5436 | payment_requests, state_machine_context, outbox_events, event_store, fraud_screening_results, fraud_alerts, fx_rates, currency_conversions, clearing_batches, clearing_records, settlement_schedules | V1, V3–V17 | RLS policies, event sourcing, JSONB payloads. V15: fraud entities, V16: FX entities, V17: clearing/settlement entities |
+| **order_db** | 5432 | orders, order_items | V1 | Composite indexes on customer_id + status |
+| **inventory_db** | 5434 | products, inventory_reservations | V1 | Optimistic locking, reservation TTL |
+| **payment_db** | 5435 | payment_authorizations, payment_captures, payment_refunds, webhook_kafka_outbox, network_status, clearing_limits | V1–V6 | CDC publication, FOR UPDATE SKIP LOCKED. V6: network management and clearing limit entities |
 
 ## Table Detailed Design
 

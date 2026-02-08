@@ -10,7 +10,7 @@
 |---|---|
 | **Architecture Pattern** | Hybrid SAGA: Temporal (workflow orchestration) + Spring State Machine (business state). 9 Maven modules with strict dependency rules. |
 | **Technology Maturity** | Java 21 LTS (8+ year support), Spring Boot 3.2.1 (GA), Temporal 1.22.3 (production-proven at Uber, Netflix, Snap). All components are GA releases. |
-| **Code Quality** | 413 automated tests across 32+ test classes. Categories: Workflow (12), Activity (25), State Machine (20), Service (75), Repository (51), Outbox (23), Webhook Kafka (21), Integration (20), Config (24). TestContainers for real database/Kafka testing. |
+| **Code Quality** | 703 automated tests (34 skipped) across 32+ test classes. Categories: Workflow (12), Activity (25), State Machine (20), Service (75), Repository (51), Outbox (23), Webhook Kafka (21), Integration (20), Config (24), and EA domain tests. TestContainers for real database/Kafka testing. |
 | **Build & Deployment** | Maven multi-module build. Docker images per service. Kubernetes manifests with Kustomize overlays (base, EKS). Zero-downtime rolling updates with PodDisruptionBudget. |
 | **State Management** | Temporal manages workflow state (durable, replay-safe). Spring State Machine manages business state (PENDING → COMPLETED, 10 states). Minimal workflow state pattern — only IDs stored in workflow, full data in database. |
 
@@ -41,7 +41,7 @@
 | **Database Strategy** | Database-per-service: 4 PostgreSQL databases (saga_db, order_db, inventory_db, payment_db) |
 | **Event Sourcing** | Transactional outbox pattern with Debezium CDC for guaranteed event delivery |
 | **Event Store** | Immutable event log with trigger-protected retention (7 years for financial events) |
-| **Schema Migration** | Flyway versioned migrations: V1–V14 across services, forward-only |
+| **Schema Migration** | Flyway versioned migrations: saga_db V1,V3–V17; order_db V1–V4; inventory_db V1–V5; payment_db V1–V6. Forward-only. |
 | **Data Isolation** | PostgreSQL RLS with `tenant_id`, enforced via `SET LOCAL` session variables |
 | **Consistency Model** | Eventual consistency across services, strong consistency within each database |
 
