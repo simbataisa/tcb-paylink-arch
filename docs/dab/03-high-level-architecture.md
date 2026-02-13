@@ -181,64 +181,45 @@ Shows the Payment SAGA Platform positioned within the bank-wide ecosystem, with 
 C4Context
     title System Context Diagram — Payment SAGA Platform in Bank-wide Ecosystem
 
-    Person(customer, "Bank Customer", "Initiates payments via ROC/COC (Retail/Corporate Online Channels)")
-    Person(tpp, "Third-Party Provider", "Licensed TPP accessing Open Banking APIs per SBV Circular 64")
-    Person(ops, "Operations Team", "Monitors workflows, handles DLT review and manual interventions")
+    Person(customer, "Bank Customer", "Initiates payments via ROC/COC<br/>(Retail/Corporate Online Channels)")
+    Person(tpp, "Third-Party Provider", "Licensed TPP accessing<br/>Open Banking APIs<br/>per SBV Circular 64")
+    Person(ops, "Operations Team", "Monitors workflows,<br/>handles DLT review<br/>and manual interventions")
 
     Enterprise_Boundary(bank, "Bank-wide Ecosystem") {
 
-        System(paymentSaga, "Payment SAGA Platform", "Hybrid SAGA orchestration (Temporal + Spring State Machine). Implements Payment Orchestrator, Payment Core, Financial Gateways, and Payment Product layers.")
+        System(paymentSaga, "Payment SAGA Platform", "Hybrid SAGA orchestration<br/>(Temporal + Spring State Machine).<br/>Implements Payment Orchestrator,<br/>Payment Core, Financial Gateways,<br/>and Payment Product layers.")
 
-        System_Ext(esb, "Bank-wide Integration Layer", "Enterprise Service Bus connecting channels, core systems, and external networks")
-        System_Ext(t24, "Core Banking (T24)", "Source of Funds — account management, ledger posting, balance inquiry")
-        System_Ext(cms, "CMS / Loyalty / AE+", "Card Management, Loyalty points, Additional banking products")
-        System_Ext(bpa, "BPA / IDA Workflow", "Bank-side approval workflows for high-value or flagged transactions")
-        System_Ext(tci, "TCI", "Transaction Control Interface — transaction monitoring and limits")
+        System_Ext(esb, "Bank-wide Integration Layer", "Enterprise Service Bus connecting<br/>channels, core systems,<br/>and external networks")
+        System_Ext(t24, "Core Banking (T24)", "Source of Funds —<br/>account management,<br/>ledger posting, balance inquiry")
+        System_Ext(cms, "CMS / Loyalty / AE+", "Card Management, Loyalty points,<br/>Additional banking products")
+        System_Ext(bpa, "BPA / IDA Workflow", "Bank-side approval workflows<br/>for high-value or flagged transactions")
+        System_Ext(tci, "TCI", "Transaction Control Interface —<br/>transaction monitoring and limits")
         System_Ext(visualFx, "Visual FX", "Foreign exchange rate management and FX conversion")
-        System_Ext(idp, "Enterprise IdP", "OAuth2 / OIDC identity provider for JWT issuance and validation")
+        System_Ext(idp, "Enterprise IdP", "OAuth2 / OIDC identity provider<br/>for JWT issuance and validation")
     }
 
-    Boundary(channels, "Inbound Channels") {
-        System_Ext(roc, "ROC / COC", "Retail and Corporate Online Channels — web and mobile banking apps")
-        System_Ext(partners, "Partners", "ERP (MISA), e-Wallets (MoMo, Shopee), Securities (VCI, VND, SSI, DNSE, VPS)")
-        System_Ext(directInt, "Direct Integration", "Host-to-host API integrations with corporate clients")
-        System_Ext(twoCms, "TWO / CMS Channels", "Transaction Workflow Operations, Cash Management Systems")
-        System_Ext(pgChannels, "Payment Gateway Channels", "Cybersource, NAPAS domestic gateway")
-    }
+    System_Ext(channels, "Inbound Channels", "ROC/COC, Partners (MoMo, Shopee, VCI),<br/>Direct Integration, TWO/CMS,<br/>Payment Gateway (Cybersource, NAPAS)")
 
     Boundary(outbound, "Outbound Networks & Providers") {
         System_Ext(citad, "CITAD", "State Bank interbank clearing (VND domestic)")
-        System_Ext(napas, "NAPAS (BFTZ.8)", "National Payment Switch — domestic card and interbank")
-        System_Ext(swift, "SWIFT (MX/MT)", "International wire transfers — MT103, MX pacs.008")
+        System_Ext(napas, "NAPAS (BFTZ.8)", "National Payment Switch —<br/>domestic card and interbank")
+        System_Ext(swift, "SWIFT (MX/MT)", "International wire transfers —<br/>MT103, MX pacs.008")
         System_Ext(otherBanks, "Partner Banks", "VCB, BIDV, and other domestic banks")
-        System_Ext(svcProviders, "Service Providers", "Billings & Top-up: EVN, VinHome, VNPay, PAYOO, Hawacom")
+        System_Ext(svcProviders, "Service Providers", "Billings & Top-up:<br/>EVN, VinHome, VNPay, PAYOO, Hawacom")
     }
 
-    Boundary(pspBoundary, "Payment Service Providers") {
-        System_Ext(stripe, "Stripe", "Card processing, webhooks (HMAC-SHA256)")
-        System_Ext(paypal, "PayPal", "PayPal payments, webhooks (RSA-SHA256)")
-        System_Ext(adyen, "Adyen", "Multi-method payments, webhooks (HMAC-SHA256)")
-        System_Ext(square, "Square", "POS and online payments, webhooks")
-    }
+    System_Ext(psp, "Payment Service Providers", "Stripe, PayPal, Adyen, Square —<br/>card processing, webhooks<br/>(HMAC/RSA signed)")
 
-    Rel(customer, roc, "Web/Mobile banking")
+    Rel(customer, channels, "Web/Mobile banking")
     Rel(tpp, paymentSaga, "Open Banking APIs", "HTTPS/REST")
     Rel(ops, paymentSaga, "Monitors, intervenes", "Temporal UI, Grafana")
 
-    Rel(roc, esb, "Payment requests")
-    Rel(partners, esb, "Partner transactions")
-    Rel(directInt, esb, "H2H API calls")
-    Rel(twoCms, esb, "Cash mgmt operations")
-    Rel(pgChannels, esb, "Gateway transactions")
+    Rel(channels, esb, "Payment requests from all channels", "Various protocols")
 
     Rel(esb, paymentSaga, "Routes payment requests", "REST/JSON via Kong")
 
-    Rel(paymentSaga, stripe, "Authorize, capture, refund", "HTTPS/REST")
-    Rel(paymentSaga, paypal, "Authorize, capture, refund", "HTTPS/REST")
-    Rel(paymentSaga, adyen, "Authorize, capture, refund", "HTTPS/REST")
-    Rel(paymentSaga, square, "Authorize, capture, refund", "HTTPS/REST")
-    Rel(stripe, paymentSaga, "Payment webhooks", "HTTPS POST, signed")
-    Rel(paypal, paymentSaga, "Payment webhooks", "HTTPS POST, signed")
+    Rel(paymentSaga, psp, "Authorize, capture, refund", "HTTPS/REST")
+    Rel(psp, paymentSaga, "Payment webhooks", "HTTPS POST, signed")
 
     Rel(paymentSaga, esb, "Settlement events, status updates", "Kafka / REST")
     Rel(esb, citad, "Interbank clearing")
@@ -247,9 +228,6 @@ C4Context
     Rel(esb, otherBanks, "Interbank settlement")
     Rel(esb, svcProviders, "Bill payments, top-up")
 
-    Rel(paymentSaga, t24, "Balance inquiry, posting (future)", "REST via ESB")
-    Rel(paymentSaga, bpa, "Approval requests (future)", "Async via ESB")
-    Rel(paymentSaga, tci, "Limit checks (future)", "REST via ESB")
     Rel(paymentSaga, idp, "JWT validation", "OAuth2 / JWKS")
 
     UpdateLayoutConfig($c4ShapeInRow="4", $c4BoundaryInRow="2")
@@ -266,54 +244,51 @@ C4Container
     System_Ext(esb, "Bank-wide Integration Layer", "ESB / API Gateway")
     System_Ext(psp, "Payment Service Providers", "Stripe, PayPal, Adyen, Square")
     System_Ext(idp, "Enterprise IdP", "OAuth2 / JWKS")
-    System_Ext(t24, "Source of Funds (T24)", "Core Banking (future)")
 
     Container_Boundary(edge, "Edge Layer (AWS)") {
-        Container(waf, "AWS WAF + Shield", "AWS Managed", "DDoS protection, OWASP rules, IP reputation filtering")
-        Container(alb, "AWS ALB", "AWS Managed", "SSL termination, health checks, target group routing")
+        Container(waf, "AWS WAF + Shield + ALB", "AWS Managed", "DDoS protection, OWASP rules,<br/>IP reputation filtering,<br/>SSL termination, health checks")
     }
 
     Container_Boundary(platform, "Payment SAGA Platform") {
 
         Container_Boundary(payProduct, "Payment Product Layer") {
-            Container(kong, "Kong Ingress Controller", "Kong 3.4", "API Gateway: JWT auth, rate limiting (100/min payments, 1000/min global), security headers, correlation ID, webhook routing. Exposes Direct Payment and Open Banking product APIs.")
-            Container(openBanking, "Open Banking API", "Java 21 / Spring Boot 3.2.1 / Port 8085", "SBV Circular 64: TPP Tier 1-3 access, consent management, SCA. Payment initiation and account information APIs. 2-10 pods (HPA)")
+            Container(kong, "Kong Ingress Controller", "Kong 3.4", "API Gateway: JWT auth, rate limiting<br/>(100/min payments, 1000/min global),<br/>security headers, correlation ID,<br/>webhook routing.<br/>Exposes Direct Payment and<br/>Open Banking product APIs.")
+            Container(openBanking, "Open Banking API", "Java 21 / Spring Boot 3.2.1 / Port 8085", "SBV Circular 64: TPP Tier 1-3 access,<br/>consent management, SCA.<br/>Payment initiation and account info APIs.<br/>2-10 pods (HPA)")
         }
 
         Container_Boundary(payOrchestrator, "Payment Orchestrator Layer") {
-            Container(orchestrator, "SAGA Orchestrator", "Java 21 / Spring Boot 3.2.1 / Port 9090", "Payment Init + Orchestration Engine + Data Converter. Temporal workflows (PaymentSagaWorkflowImpl), Spring State Machine, Kafka consumer, priority-based PaymentRouter (36 sharded queues). 8-50 pods (HPA)")
+            Container(orchestrator, "SAGA Orchestrator", "Java 21 / Spring Boot 3.2.1 / Port 9090", "Payment Init + Orchestration Engine<br/>+ Data Converter.<br/>Temporal workflows, Spring State Machine,<br/>Kafka consumer, PaymentRouter<br/>(36 sharded queues). 8-50 pods (HPA)")
         }
 
         Container_Boundary(payCore, "Payment Core Layer") {
-            Container(orderSvc, "Order Service", "Java 21 / Spring Boot 3.2.1 / Port 8081", "PREPARING: Acceptance & Mapping, Business Validations. Order lifecycle: validation, creation, status management. 2 replicas")
-            Container(inventorySvc, "Inventory Service", "Java 21 / Spring Boot 3.2.1 / Port 8082", "PROCESSING: Fund Reservation. Stock management: reservation with TTL, release, confirmation. Optimistic locking. 2 replicas")
-            Container(paymentSvc, "Payment Gateway Service", "Java 21 / Spring Boot 3.2.1 / Port 8083", "PROCESSING: Fee & Posting, Routing. FINALIZING: Interfacing (CDC outbox). Authorize, capture, void, refund via PSPs. Webhook reception. 2 replicas")
+            Container(orderSvc, "Order Service", "Java 21 / Spring Boot 3.2.1 / Port 8081", "PREPARING: Acceptance & Mapping,<br/>Business Validations.<br/>Order lifecycle: validation, creation,<br/>status management. 2 replicas")
+            Container(inventorySvc, "Inventory Service", "Java 21 / Spring Boot 3.2.1 / Port 8082", "PROCESSING: Fund Reservation.<br/>Stock management: reservation with TTL,<br/>release, confirmation.<br/>Optimistic locking. 2 replicas")
+            Container(paymentSvc, "Payment Gateway Service", "Java 21 / Spring Boot 3.2.1 / Port 8083", "PROCESSING: Fee & Posting, Routing.<br/>FINALIZING: Interfacing (CDC outbox).<br/>Authorize, capture, void, refund via PSPs.<br/>Webhook reception. 2 replicas")
         }
 
         Container_Boundary(finGateways, "Financial Gateways Layer") {
-            Container(webhookEngine, "Webhook Processor Engine", "Spring Component (in Payment Gateway)", "Network Routing + Messaging Formatting. Provider-specific processors: Stripe (HMAC-SHA256), PayPal (RSA-SHA256), Adyen, Square. Signature verification and event normalization.")
-            Container(cdcOutbox, "CDC Outbox Pipeline", "Debezium 2.5 / Kafka Connect", "Interfacing: webhook_kafka_outbox → PostgreSQL WAL → Debezium → Kafka. <10ms latency. EventRouter SMT.")
+            Container(webhookEngine, "Webhook Processor Engine", "Spring Component (in Payment Gateway)", "Network Routing + Messaging Formatting.<br/>Provider-specific processors:<br/>Stripe (HMAC-SHA256), PayPal (RSA-SHA256),<br/>Adyen, Square.<br/>Signature verification and normalization.")
+            Container(cdcOutbox, "CDC Outbox Pipeline", "Debezium 2.5 / Kafka Connect", "Interfacing: webhook_kafka_outbox →<br/>PostgreSQL WAL → Debezium → Kafka.<br/><10ms latency. EventRouter SMT.")
         }
 
         Container_Boundary(infra, "Platform Infrastructure") {
-            Container(temporal, "Temporal Server", "Temporal 1.22.3 / gRPC 7233", "Durable workflow execution: 512 history shards. Frontend(3), History(4), Matching(3), Worker(2)")
-            ContainerQueue(kafka, "Apache Kafka", "Kafka 3.6 / MSK", "Event streaming: 8 topics, 12 partitions max. LZ4 compression. Webhook events, domain events, DLT")
-            Container(redis, "Redis", "Redis 7 / ElastiCache", "Idempotency keys (Deduplication & Prioritising), distributed locking, caching. 3-node multi-AZ")
+            Container(temporal, "Temporal Server", "Temporal 1.22.3 / gRPC 7233", "Durable workflow execution:<br/>512 history shards.<br/>Frontend(3), History(4),<br/>Matching(3), Worker(2)")
+            ContainerQueue(kafka, "Apache Kafka", "Kafka 3.6 / MSK", "Event streaming: 8 topics,<br/>12 partitions max. LZ4 compression.<br/>Webhook events, domain events, DLT")
+            Container(redis, "Redis", "Redis 7 / ElastiCache", "Idempotency keys<br/>(Deduplication & Prioritising),<br/>distributed locking, caching.<br/>3-node multi-AZ")
             Container(istio, "Istio Service Mesh", "Istio 1.20 / Envoy", "mTLS STRICT, AuthorizationPolicy, circuit breaking, B3 tracing")
         }
 
         Container_Boundary(dataLayer, "Data Layer (Database-per-Service)") {
-            ContainerDb(sagaDb, "saga_db", "PostgreSQL 16 / Port 5436", "payment_requests, state_machine_context, outbox_events, event_store. RLS enabled")
+            ContainerDb(sagaDb, "saga_db", "PostgreSQL 16 / Port 5436", "payment_requests, state_machine_context,<br/>outbox_events, event_store.<br/>RLS enabled")
             ContainerDb(orderDb, "order_db", "PostgreSQL 16 / Port 5432", "orders, order_items, customers")
             ContainerDb(inventoryDb, "inventory_db", "PostgreSQL 16 / Port 5434", "products, inventory_reservations")
-            ContainerDb(paymentDb, "payment_db", "PostgreSQL 16 / Port 5435", "payment_authorizations, captures, refunds, webhook_kafka_outbox. CDC publication enabled")
+            ContainerDb(paymentDb, "payment_db", "PostgreSQL 16 / Port 5435", "payment_authorizations, captures,<br/>refunds, webhook_kafka_outbox.<br/>CDC publication enabled")
         }
     }
 
     Rel(esb, waf, "Payment requests from channels", "HTTPS")
     Rel(psp, kong, "Webhook POST (signed)", "HTTPS")
-    Rel(waf, alb, "Forwards traffic")
-    Rel(alb, kong, "Routes to Kong")
+    Rel(waf, kong, "Routes via ALB", "HTTPS")
 
     Rel(kong, orchestrator, "REST/JSON", "Payment SAGA API — Payment Init")
     Rel(kong, openBanking, "REST/JSON", "Open Banking API — TPP access")
@@ -338,7 +313,6 @@ C4Container
     Rel(inventorySvc, inventoryDb, "JDBC", "Read/write inventory")
     Rel(paymentSvc, paymentDb, "JDBC", "Read/write payments, outbox")
 
-    Rel(orchestrator, t24, "Balance inquiry (future)", "REST via ESB")
     Rel(paymentSvc, esb, "Settlement events", "Kafka → ESB adapter")
 
     UpdateLayoutConfig($c4ShapeInRow="4", $c4BoundaryInRow="1")
@@ -362,35 +336,32 @@ C4Component
     Container_Ext(redis, "Redis", "Cache / Idempotency")
 
     Container_Boundary(orchestrator, "SAGA Orchestrator") {
-        Component(paymentController, "PaymentController", "Spring REST Controller", "POST /api/v1/payments — accepts payment requests, starts Temporal workflows, returns workflow execution ID")
-        Component(paymentRouter, "PaymentRouter", "Spring Component", "Calculates priority (CRITICAL/HIGH/NORMAL/LOW) and shard ID from customerId hash. Routes to 1 of 36 task queues")
-        Component(workflow, "PaymentSagaWorkflowImpl", "Temporal Workflow", "5-step SAGA: Validate → Reserve → Authorize → Capture → Complete. LIFO compensation stack. Signal handlers for external webhooks")
-        Component(paymentActivities, "PaymentActivities", "Temporal Activities", "Calls Order/Inventory/Payment services via Feign REST. Retry: 3 attempts, 1-30s backoff")
-        Component(stateMachineActivities, "StateMachineActivities", "Temporal Local Activities", "Transitions Spring State Machine: 10 forward states + compensation states. Publishes domain events to outbox")
-        Component(dataActivities, "DataActivities", "Temporal Activities", "CRUD on payment_requests, state_machine_context. Keeps workflow state minimal — data lives in DB")
-        Component(stateMachineConfig, "PaymentStateMachineConfig", "Spring State Machine", "Defines states (PENDING→COMPLETED), events, guards, and transition actions. Factory creates per-workflow instances")
-        Component(webhookConsumer, "WebhookEventConsumer", "Kafka Listener", "Consumes webhook.payment.events (3 threads). Manual ack, 5 retries with exponential backoff (1-30s)")
-        Component(idempotencyService, "WebhookIdempotencyService", "Spring Service", "Redis-based deduplication by eventId. Prevents duplicate webhook processing")
-        Component(correlationService, "WorkflowCorrelationService", "Spring Service", "Maps orderId/authId/captureId to Temporal workflowId for signal delivery")
-        Component(actionDispatcher, "WorkflowActionDispatcher", "Spring Service", "Dispatches signals to running workflows: externalPaymentConfirmed, externalCaptureConfirmed, externalPaymentFailed, disputeOpened")
-        Component(shardedWorkerFactory, "ShardedWorkerFactory", "Spring Component", "Registers Temporal workers for each shard-priority combination. 36 task queues, configurable concurrency per priority")
-        Component(feignClients, "Feign Clients", "Spring Cloud OpenFeign", "order-service, inventory-service, payment-gateway-service. Profile-based discovery (local/docker/k8s/istio)")
-        Component(outboxPublisher, "OutboxPublisher", "Spring Component", "Writes domain events to outbox_events table within business transaction. Debezium CDC captures for Kafka delivery")
+        Component(paymentController, "PaymentController", "Spring REST Controller", "POST /api/v1/payments —<br/>accepts payment requests,<br/>starts Temporal workflows,<br/>returns workflow execution ID")
+        Component(paymentRouter, "PaymentRouter", "Spring Component", "Calculates priority<br/>(CRITICAL/HIGH/NORMAL/LOW)<br/>and shard ID from customerId hash.<br/>Routes to 1 of 36 task queues")
+        Component(workflow, "PaymentSagaWorkflowImpl", "Temporal Workflow", "5-step SAGA: Validate → Reserve →<br/>Authorize → Capture → Complete.<br/>LIFO compensation stack.<br/>Signal handlers for external webhooks")
+        Component(paymentActivities, "PaymentActivities", "Temporal Activities", "Calls Order/Inventory/Payment<br/>services via Feign REST.<br/>Retry: 3 attempts, 1-30s backoff")
+        Component(stateMachineActivities, "StateMachineActivities", "Temporal Local Activities", "Transitions Spring State Machine:<br/>10 forward states + compensation states.<br/>Publishes domain events to outbox")
+        Component(dataActivities, "DataActivities", "Temporal Activities", "CRUD on payment_requests,<br/>state_machine_context.<br/>Keeps workflow state minimal —<br/>data lives in DB")
+        Component(stateMachineConfig, "PaymentStateMachineConfig", "Spring State Machine", "Defines states (PENDING→COMPLETED),<br/>events, guards, transition actions.<br/>Factory creates per-workflow instances")
+        Component(webhookConsumer, "WebhookEventConsumer", "Kafka Listener", "Consumes webhook.payment.events<br/>(3 threads). Manual ack,<br/>5 retries with exponential backoff (1-30s)")
+        Component(idempotencyService, "WebhookIdempotencyService", "Spring Service", "Redis-based deduplication by eventId.<br/>Prevents duplicate webhook processing")
+        Component(correlationService, "WorkflowCorrelationService", "Spring Service", "Maps orderId/authId/captureId<br/>to Temporal workflowId<br/>for signal delivery")
+        Component(actionDispatcher, "WorkflowActionDispatcher", "Spring Service", "Dispatches signals to running workflows:<br/>externalPaymentConfirmed,<br/>externalCaptureConfirmed,<br/>externalPaymentFailed, disputeOpened")
+        Component(shardedWorkerFactory, "ShardedWorkerFactory", "Spring Component", "Registers Temporal workers for each<br/>shard-priority combination.<br/>36 task queues, configurable<br/>concurrency per priority")
+        Component(feignClients, "Feign Clients", "Spring Cloud OpenFeign", "order-service, inventory-service,<br/>payment-gateway-service.<br/>Profile-based discovery<br/>(local/docker/k8s/istio)")
+        Component(outboxPublisher, "OutboxPublisher", "Spring Component", "Writes domain events to outbox_events<br/>table within business transaction.<br/>Debezium CDC captures for Kafka delivery")
     }
 
     Rel(kong, paymentController, "REST/JSON", "POST /api/v1/payments")
     Rel(paymentController, paymentRouter, "Calls", "Determine task queue")
     Rel(paymentController, temporal, "gRPC", "Start workflow on routed queue")
-    Rel(paymentRouter, workflow, "Routes to", "payment-saga-queue-{priority}-shard-{id}")
 
     Rel(workflow, paymentActivities, "Executes", "Business operations")
     Rel(workflow, stateMachineActivities, "Executes", "State transitions (local)")
     Rel(workflow, dataActivities, "Executes", "DB read/write")
 
     Rel(paymentActivities, feignClients, "Delegates to", "REST calls")
-    Rel(feignClients, orderSvc, "Feign REST", "Validate, cancel, complete")
-    Rel(feignClients, inventorySvc, "Feign REST", "Reserve, release")
-    Rel(feignClients, paymentSvc, "Feign REST", "Authorize, capture, void, refund")
+    Rel(feignClients, orderSvc, "Feign REST", "Order, Inventory, Payment services")
 
     Rel(stateMachineActivities, stateMachineConfig, "Uses", "Get/transition state")
     Rel(stateMachineActivities, outboxPublisher, "Publishes", "Domain events to outbox")
@@ -419,38 +390,25 @@ C4Component
     title Component Diagram — Payment Gateway Service (payment-gateway-service)
 
     Container_Ext(kong, "Kong Gateway", "API Gateway")
-    Container_Ext(stripe, "Stripe", "Payment Provider")
-    Container_Ext(paypal, "PayPal", "Payment Provider")
-    Container_Ext(adyen, "Adyen", "Payment Provider")
-    Container_Ext(square, "Square", "Payment Provider")
+    Container_Ext(psp, "Payment Service Providers", "Stripe, PayPal, Adyen, Square")
     ContainerDb_Ext(paymentDb, "payment_db", "PostgreSQL 16")
     Container_Ext(debezium, "Debezium CDC", "Kafka Connect")
 
     Container_Boundary(paymentGw, "Payment Gateway Service") {
-        Component(webhookController, "WebhookController", "Spring REST Controller", "POST /api/webhooks/{provider} — receives PSP webhooks, validates signatures")
-        Component(paymentController, "PaymentController", "Spring REST Controller", "POST /api/v1/payments/authorize|capture|refund — payment operations")
-        Component(processorEngine, "WebhookProcessorEngine", "Spring Component", "Dispatches webhooks to provider-specific processors based on event type")
-        Component(stripeProcessor, "StripeWebhookProcessor", "Strategy", "HMAC-SHA256 signature verification, Stripe event parsing")
-        Component(paypalProcessor, "PayPalWebhookProcessor", "Strategy", "RSA-SHA256 certificate verification, PayPal event parsing")
-        Component(adyenProcessor, "AdyenWebhookProcessor", "Strategy", "HMAC-SHA256 verification, Adyen event parsing")
-        Component(squareProcessor, "SquareWebhookProcessor", "Strategy", "Square signature verification, event parsing")
-        Component(kafkaPublisher, "WebhookKafkaPublisher", "Spring Component", "Writes processed webhook events to webhook_kafka_outbox table within the business transaction")
-        Component(paymentService, "PaymentService", "Spring Service", "Payment orchestration: authorize, capture, void, refund via PSP client adapters")
-        Component(outboxEntity, "WebhookKafkaOutbox", "JPA Entity + Repository", "Outbox table with FOR UPDATE SKIP LOCKED. CDC publication on INSERT")
-        Component(cdcCleanup, "WebhookKafkaCdcCleanupJob", "Scheduled Job", "Hourly cleanup of captured outbox events (status=CAPTURED, age>1h)")
+        Component(webhookController, "WebhookController", "Spring REST Controller", "POST /api/webhooks/{provider} —<br/>receives PSP webhooks,<br/>validates signatures")
+        Component(paymentController, "PaymentController", "Spring REST Controller", "POST /api/v1/payments/<br/>authorize|capture|refund —<br/>payment operations")
+        Component(processorEngine, "WebhookProcessorEngine", "Spring Component + Strategy Pattern", "Dispatches webhooks to provider-specific<br/>processors (Stripe HMAC-SHA256,<br/>PayPal RSA-SHA256, Adyen, Square).<br/>Signature verification and normalization.")
+        Component(kafkaPublisher, "WebhookKafkaPublisher", "Spring Component", "Writes processed webhook events to<br/>webhook_kafka_outbox table<br/>within the business transaction")
+        Component(paymentService, "PaymentService", "Spring Service", "Payment orchestration: authorize,<br/>capture, void, refund<br/>via PSP client adapters")
+        Component(outboxEntity, "WebhookKafkaOutbox", "JPA Entity + Repository", "Outbox table with<br/>FOR UPDATE SKIP LOCKED.<br/>CDC publication on INSERT")
+        Component(cdcCleanup, "WebhookKafkaCdcCleanupJob", "Scheduled Job", "Hourly cleanup of captured<br/>outbox events<br/>(status=CAPTURED, age>1h)")
     }
 
     Rel(kong, webhookController, "POST", "/api/webhooks/{provider}")
     Rel(kong, paymentController, "POST", "/api/v1/payments/*")
 
     Rel(webhookController, processorEngine, "Dispatches", "Raw webhook payload + headers")
-    Rel(processorEngine, stripeProcessor, "Delegates", "Stripe events")
-    Rel(processorEngine, paypalProcessor, "Delegates", "PayPal events")
-    Rel(processorEngine, adyenProcessor, "Delegates", "Adyen events")
-    Rel(processorEngine, squareProcessor, "Delegates", "Square events")
-
-    Rel(stripeProcessor, kafkaPublisher, "Returns", "Validated WebhookKafkaEvent")
-    Rel(paypalProcessor, kafkaPublisher, "Returns", "Validated WebhookKafkaEvent")
+    Rel(processorEngine, kafkaPublisher, "Returns", "Validated WebhookKafkaEvent")
     Rel(kafkaPublisher, outboxEntity, "INSERT", "Within @Transactional")
     Rel(outboxEntity, paymentDb, "JDBC", "webhook_kafka_outbox table")
     Rel(cdcCleanup, paymentDb, "DELETE", "Captured events >1h old")
@@ -458,10 +416,7 @@ C4Component
     Rel(debezium, paymentDb, "WAL", "Captures INSERT on outbox table (<10ms)")
 
     Rel(paymentController, paymentService, "Calls", "Authorize, capture, refund")
-    Rel(paymentService, stripe, "HTTPS", "Stripe API calls")
-    Rel(paymentService, paypal, "HTTPS", "PayPal API calls")
-    Rel(paymentService, adyen, "HTTPS", "Adyen API calls")
-    Rel(paymentService, square, "HTTPS", "Square API calls")
+    Rel(paymentService, psp, "HTTPS/REST", "Authorize, capture, refund via PSP adapters")
     Rel(paymentService, paymentDb, "JDBC", "payment_authorizations, captures, refunds")
 
     UpdateLayoutConfig($c4ShapeInRow="4", $c4BoundaryInRow="1")
